@@ -225,6 +225,7 @@ function parseControlCommand(message) {
 
 function main() {
   const serverConfig = parseServerAddress(SERVER_IP);
+  debugLog(`config auth_anyways=${AUTH_ANYWAYS}`);
   const commandCenter = createBot(CENTER_BOT_NAME, serverConfig);
 
   commandCenter.on('chat', (username, message) => {

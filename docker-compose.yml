@@ -7,6 +7,7 @@ services:
       SERVER_IP: ${SERVER_IP}
       ADMIN: ${ADMIN}
       CENTER_BOT_NAME: ${CENTER_BOT_NAME:-command-center}
+      AUTH_ANYWAYS: ${AUTH_ANYWAYS:-0}
     restart: unless-stopped
     volumes:
       - ./settings:/app/settings
