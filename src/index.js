@@ -17,6 +17,7 @@ const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
 const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 1000);
 const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 1500);
 const RECONNECT_DELAY_MS = Number(process.env.RECONNECT_DELAY_MS || 10000);
+const AUTH_WORLD_READY_WAIT_MS = 5000;
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
     .split(',')
@@ -108,6 +109,27 @@ function formatReason(reason) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForWorldReady(bot) {
+  await sleep(AUTH_WORLD_READY_WAIT_MS);
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 15000) {
+    const hasWorld = Boolean(bot.world && bot.game?.dimension);
+    const hasEntity = Boolean(bot.entity && bot.entity.position);
+    if (hasWorld && hasEntity) {
+      return true;
+    }
+
+    await sleep(250);
+  }
+
+  return false;
+}
+
 function sendAuthCommands(bot, password) {
   setTimeout(() => {
     bot.chat(`/register ${password}`);
@@ -119,6 +141,7 @@ function sendAuthCommands(bot, password) {
 
 function attachAutoAuthFlow(bot, serverIp) {
   let authTried = false;
+  let ended = false;
 
   bot.on('spawn', async () => {
     if (authTried) {
@@ -128,6 +151,13 @@ function attachAutoAuthFlow(bot, serverIp) {
     authTried = true;
 
     try {
+      const worldReady = await waitForWorldReady(bot);
+      if (ended) {
+        return;
+      }
+
+      debugLog(`auth-ready ${bot.username}: worldReady=${worldReady}`);
+
       if (AUTH_ANYWAYS) {
         const password = derivePassword(bot.username, serverIp);
         debugLog(`auth-run ${bot.username}: AUTH_ANYWAYS enabled, issuing /register then /login`);
@@ -152,6 +182,10 @@ function attachAutoAuthFlow(bot, serverIp) {
     } catch (error) {
       console.warn(`[${bot.username}] auth command check failed: ${error.message}`);
     }
+  });
+
+  bot.on('end', () => {
+    ended = true;
   });
 }
 
@@ -245,6 +279,7 @@ function parseControlCommand(message) {
 function main() {
   const serverConfig = parseServerAddress(SERVER_IP);
   debugLog(`config auth_anyways=${AUTH_ANYWAYS}`);
+  debugLog(`config auth_world_ready_wait_ms=${AUTH_WORLD_READY_WAIT_MS}`);
   debugLog(`config auth_initial_delay_ms=${AUTH_INITIAL_DELAY_MS} auth_login_delay_ms=${AUTH_LOGIN_DELAY_MS}`);
   debugLog(`config reconnect_delay_ms=${RECONNECT_DELAY_MS}`);
 
