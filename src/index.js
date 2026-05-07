@@ -131,8 +131,18 @@ async function waitForWorldReady(bot) {
 
 function sendAuthCommands(bot, password) {
   setTimeout(() => {
+    if (bot._client?.state !== 'play') {
+      debugLog(`auth-skip ${bot.username}: client not in play state before /register`);
+      return;
+    }
+
     bot.chat(`/register ${password}`);
     setTimeout(() => {
+      if (bot._client?.state !== 'play') {
+        debugLog(`auth-skip ${bot.username}: client not in play state before /login`);
+        return;
+      }
+
       bot.chat(`/login ${password}`);
     }, Math.max(0, AUTH_LOGIN_DELAY_MS));
   }, Math.max(0, AUTH_INITIAL_DELAY_MS));
@@ -142,15 +152,16 @@ function attachAutoAuthFlow(bot, serverIp) {
   let authSent = false;
   let ended = false;
   let authTimer = null;
+  let authGeneration = 0;
 
-  async function runAuthAttempt(triggerReason) {
-    if (ended || authSent) {
+  async function runAuthAttempt(triggerReason, generation) {
+    if (ended || authSent || generation !== authGeneration) {
       return;
     }
 
     try {
       const worldReady = await waitForWorldReady(bot);
-      if (ended || authSent) {
+      if (ended || authSent || generation !== authGeneration) {
         return;
       }
 
@@ -159,7 +170,12 @@ function attachAutoAuthFlow(bot, serverIp) {
       // World can report ready during proxy transitions; wait an extra 5 seconds
       // after readiness before issuing auth commands.
       await sleep(AUTH_WORLD_READY_WAIT_MS);
-      if (ended || authSent) {
+      if (ended || authSent || generation !== authGeneration) {
+        return;
+      }
+
+      if (bot._client?.state !== 'play') {
+        debugLog(`auth-skip ${bot.username}: client left play state after readiness wait`);
         return;
       }
 
@@ -196,6 +212,9 @@ function attachAutoAuthFlow(bot, serverIp) {
       return;
     }
 
+    authGeneration += 1;
+    const currentGeneration = authGeneration;
+
     if (authTimer) {
       clearTimeout(authTimer);
       authTimer = null;
@@ -203,12 +222,14 @@ function attachAutoAuthFlow(bot, serverIp) {
 
     authTimer = setTimeout(() => {
       authTimer = null;
-      runAuthAttempt(triggerReason).catch((error) => {
+      runAuthAttempt(triggerReason, currentGeneration).catch((error) => {
         console.warn(`[${bot.username}] auth scheduling error: ${error.message}`);
       });
     }, AUTH_WORLD_READY_WAIT_MS);
 
-    debugLog(`auth-schedule ${bot.username}: trigger=${triggerReason} wait=${AUTH_WORLD_READY_WAIT_MS}ms`);
+    debugLog(
+      `auth-schedule ${bot.username}: trigger=${triggerReason} wait=${AUTH_WORLD_READY_WAIT_MS}ms gen=${currentGeneration}`
+    );
   }
 
   bot.on('spawn', () => {
