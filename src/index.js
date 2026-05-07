@@ -152,16 +152,15 @@ function attachAutoAuthFlow(bot, serverIp) {
   let authSent = false;
   let ended = false;
   let authTimer = null;
-  let authGeneration = 0;
 
-  async function runAuthAttempt(triggerReason, generation) {
-    if (ended || authSent || generation !== authGeneration) {
+  async function runAuthAttempt(triggerReason) {
+    if (ended || authSent) {
       return;
     }
 
     try {
       const worldReady = await waitForWorldReady(bot);
-      if (ended || authSent || generation !== authGeneration) {
+      if (ended || authSent) {
         return;
       }
 
@@ -170,7 +169,7 @@ function attachAutoAuthFlow(bot, serverIp) {
       // World can report ready during proxy transitions; wait an extra 5 seconds
       // after readiness before issuing auth commands.
       await sleep(AUTH_WORLD_READY_WAIT_MS);
-      if (ended || authSent || generation !== authGeneration) {
+      if (ended || authSent) {
         return;
       }
 
@@ -212,32 +211,23 @@ function attachAutoAuthFlow(bot, serverIp) {
       return;
     }
 
-    authGeneration += 1;
-    const currentGeneration = authGeneration;
-
     if (authTimer) {
-      clearTimeout(authTimer);
-      authTimer = null;
+      debugLog(`auth-schedule skip ${bot.username}: already scheduled trigger=${triggerReason}`);
+      return;
     }
 
     authTimer = setTimeout(() => {
       authTimer = null;
-      runAuthAttempt(triggerReason, currentGeneration).catch((error) => {
+      runAuthAttempt(triggerReason).catch((error) => {
         console.warn(`[${bot.username}] auth scheduling error: ${error.message}`);
       });
     }, AUTH_WORLD_READY_WAIT_MS);
 
-    debugLog(
-      `auth-schedule ${bot.username}: trigger=${triggerReason} wait=${AUTH_WORLD_READY_WAIT_MS}ms gen=${currentGeneration}`
-    );
+    debugLog(`auth-schedule ${bot.username}: trigger=${triggerReason} wait=${AUTH_WORLD_READY_WAIT_MS}ms`);
   }
 
-  bot.on('spawn', () => {
-    scheduleAuthAttempt('spawn');
-  });
-
-  bot.on('respawn', () => {
-    scheduleAuthAttempt('respawn');
+  bot.on('login', () => {
+    scheduleAuthAttempt('login');
   });
 
   bot.on('end', () => {
