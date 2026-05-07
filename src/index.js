@@ -2,10 +2,17 @@ require('dotenv').config();
 
 const crypto = require('crypto');
 const mineflayer = require('mineflayer');
+const createBotCommandManager = require('./commands/bot');
+const handleSayCommand = require('./commands/say');
+const handleSlashCommand = require('./commands/command');
+const createSortCommandController = require('./commands/sort');
+const createSaveLoadController = require('./commands/save');
+const createCraftCommandController = require('./commands/craft');
 
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
 const SERVER_IP = process.env.SERVER_IP;
+const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
     .split(',')
@@ -23,7 +30,20 @@ if (ADMIN_SET.size === 0) {
   process.exit(1);
 }
 
-const managedBots = new Map();
+let sortCommands = null;
+
+function debugLog(message, extra) {
+  if (!DEBUG) {
+    return;
+  }
+
+  if (typeof extra === 'undefined') {
+    console.log(`[debug] ${message}`);
+    return;
+  }
+
+  console.log(`[debug] ${message}`, extra);
+}
 
 function parseServerAddress(serverAddress) {
   const [host, portRaw] = serverAddress.split(':');
@@ -88,11 +108,14 @@ function attachAutoAuthFlow(bot, serverIp) {
       const hasRegister = commands.has('register');
       const hasLogin = commands.has('login');
 
+      debugLog(`auth-check ${bot.username}: register=${hasRegister} login=${hasLogin}`);
+
       if (!hasRegister || !hasLogin) {
         return;
       }
 
       const password = derivePassword(bot.username, serverIp);
+      debugLog(`auth-run ${bot.username}: issuing /register then /login`);
       bot.chat(`/register ${password}`);
       setTimeout(() => {
         bot.chat(`/login ${password}`);
@@ -104,6 +127,8 @@ function attachAutoAuthFlow(bot, serverIp) {
 }
 
 function createBot(botName, serverConfig) {
+  debugLog(`create-bot ${botName} at ${serverConfig.host}:${serverConfig.port}`);
+
   const bot = mineflayer.createBot({
     host: serverConfig.host,
     port: serverConfig.port,
@@ -115,14 +140,23 @@ function createBot(botName, serverConfig) {
 
   bot.on('login', () => {
     console.log(`[${bot.username}] logged in`);
+    debugLog(`event login ${bot.username}`);
   });
 
   bot.on('end', () => {
+    if (sortCommands) {
+      sortCommands.disableSorter(bot.username);
+    }
+    if (craftCommands) {
+      craftCommands.disableCrafter(bot.username);
+    }
     console.log(`[${bot.username}] disconnected`);
+    debugLog(`event end ${bot.username}`);
   });
 
   bot.on('kicked', (reason) => {
     console.log(`[${bot.username}] kicked: ${reason}`);
+    debugLog(`event kicked ${bot.username}`, reason);
   });
 
   bot.on('error', (error) => {
@@ -132,39 +166,34 @@ function createBot(botName, serverConfig) {
   return bot;
 }
 
-function addManagedBot(botName, serverConfig) {
-  if (managedBots.has(botName)) {
-    return { ok: false, message: `Bot ${botName} already exists` };
+const botCommands = createBotCommandManager({
+  createBot,
+  debugLog,
+  onBeforeRemove: (botName) => {
+    if (sortCommands) {
+      sortCommands.disableSorter(botName);
+    }
   }
+});
 
-  const bot = createBot(botName, serverConfig);
-  managedBots.set(botName, bot);
-  return { ok: true, message: `Added bot ${botName}` };
-}
+sortCommands = createSortCommandController({
+  getManagedBot: botCommands.getManagedBot,
+  hasManagedBot: botCommands.hasManagedBot,
+  debugLog
+});
 
-function removeManagedBot(botName) {
-  const bot = managedBots.get(botName);
-  if (!bot) {
-    return { ok: false, message: `Bot ${botName} does not exist` };
-  }
+const saveLoadCommands = createSaveLoadController({
+  botCommands,
+  sortCommands,
+  serverConfig: parseServerAddress(SERVER_IP),
+  debugLog
+});
 
-  bot.end('Removed by command center');
-  managedBots.delete(botName);
-  return { ok: true, message: `Removed bot ${botName}` };
-}
-
-function listManagedBots() {
-  const names = Array.from(managedBots.keys());
-  if (names.length === 0) {
-    return 'No managed bots';
-  }
-
-  return `Managed bots: ${names.join(', ')}`;
-}
-
-function getManagedBot(botName) {
-  return managedBots.get(botName);
-}
+const craftCommands = createCraftCommandController({
+  getManagedBot: botCommands.getManagedBot,
+  hasManagedBot: botCommands.hasManagedBot,
+  debugLog
+});
 
 function parseControlCommand(message) {
   if (!message.startsWith(COMMAND_PREFIX)) {
@@ -183,72 +212,6 @@ function parseControlCommand(message) {
   return { command, parts, body };
 }
 
-function handleBotCommand(parts, serverConfig) {
-  const sub = (parts[0] || '').toLowerCase();
-
-  if (sub === 'add') {
-    const name = parts[1];
-    if (!name) {
-      return 'Usage: +bot add <botname>';
-    }
-
-    return addManagedBot(name, serverConfig).message;
-  }
-
-  if (sub === 'remove') {
-    const name = parts[1];
-    if (!name) {
-      return 'Usage: +bot remove <botname>';
-    }
-
-    return removeManagedBot(name).message;
-  }
-
-  if (sub === 'list') {
-    return listManagedBots();
-  }
-
-  return 'Usage: +bot add <botname> | +bot remove <botname> | +bot list';
-}
-
-function handleSayCommand(parts) {
-  const botName = parts[0];
-  const text = parts.slice(1).join(' ');
-
-  if (!botName || !text) {
-    return 'Usage: +say <botname> <message>';
-  }
-
-  const bot = getManagedBot(botName);
-  if (!bot) {
-    return `Bot ${botName} does not exist`;
-  }
-
-  bot.chat(text);
-  return `Sent message from ${botName}`;
-}
-
-function handleSlashCommand(parts) {
-  const botName = parts[0];
-  const slashCommand = parts.slice(1).join(' ');
-
-  if (!botName || !slashCommand) {
-    return 'Usage: +command <botname> </command args>';
-  }
-
-  if (!slashCommand.startsWith('/')) {
-    return 'Command must start with /';
-  }
-
-  const bot = getManagedBot(botName);
-  if (!bot) {
-    return `Bot ${botName} does not exist`;
-  }
-
-  bot.chat(slashCommand);
-  return `Executed command on ${botName}`;
-}
-
 function main() {
   const serverConfig = parseServerAddress(SERVER_IP);
   const commandCenter = createBot(CENTER_BOT_NAME, serverConfig);
@@ -263,30 +226,53 @@ function main() {
       return;
     }
 
+    debugLog(`command-received from ${username}: ${message}`);
+
     if (!isAdmin(username)) {
-      whisperFrom(commandCenter, username, "You dont have permition to use this command.");
+      debugLog(`command-denied for non-admin ${username}: ${message}`);
+      whisperFrom(commandCenter, username, 'You dont have permition to use this command.');
       return;
     }
 
     let result;
 
     if (parsed.command === 'bot') {
-      result = handleBotCommand(parsed.parts, serverConfig);
+      result = botCommands.handleBotCommand(parsed.parts, { serverConfig });
     } else if (parsed.command === 'say') {
-      result = handleSayCommand(parsed.parts);
+      result = handleSayCommand(parsed.parts, {
+        getManagedBot: botCommands.getManagedBot,
+        debugLog
+      });
     } else if (parsed.command === 'command') {
-      result = handleSlashCommand(parsed.parts);
+      result = handleSlashCommand(parsed.parts, {
+        getManagedBot: botCommands.getManagedBot,
+        debugLog
+      });
+    } else if (parsed.command === 'sort') {
+      result = sortCommands.handleSortCommand(parsed.parts);
+    } else if (parsed.command === 'save') {
+      result = saveLoadCommands.handleSaveCommand(parsed.parts);
+    } else if (parsed.command === 'load') {
+      result = saveLoadCommands.handleLoadCommand(parsed.parts);
+    } else if (parsed.command === 'craft') {
+      result = craftCommands.handleCraftCommand(parsed.parts);
     } else {
       result = 'Unknown command';
     }
+
+    debugLog(`command-result for ${username}: ${result}`);
 
     whisperFrom(commandCenter, username, result);
   });
 
   process.on('SIGINT', () => {
-    for (const bot of managedBots.values()) {
+    debugLog('received SIGINT, shutting down bots and sorters');
+    sortCommands.disableAllSorters();
+    craftCommands.disableAllCrafters();
+
+    botCommands.forEachManagedBot((bot) => {
       bot.end('Shutting down');
-    }
+    });
 
     commandCenter.end('Shutting down');
     process.exit(0);

@@ -40,6 +40,8 @@ These are sent in in-game chat:
 
 +say <botname> <message>
 +command <botname> /command args
++sort <botname> enable
++sort <botname> disable
 ```
 
 If a non-admin runs a command, they receive:

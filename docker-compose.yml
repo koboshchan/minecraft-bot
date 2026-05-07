@@ -1,20 +1,12 @@
 services:
-  builder:
+  bot:
     build:
       context: .
-      target: builder
-    image: minecraft-bot:builder
-    command: ["npm", "ci", "--omit=dev"]
-
-  runner:
-    build:
-      context: .
-      target: runner
-    image: minecraft-bot:runner
+    image: ghcr.io/koboshchan/minecraft-bot:main
     environment:
       SERVER_IP: ${SERVER_IP}
       ADMIN: ${ADMIN}
       CENTER_BOT_NAME: ${CENTER_BOT_NAME:-command-center}
     restart: unless-stopped
-    depends_on:
-      - builder
+    volumes:
+      - ./settings:/app/settings
