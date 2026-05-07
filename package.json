@@ -1,0 +1,27 @@
+{
+  "name": "minecraft-bot",
+  "version": "1.0.0",
+  "description": "bot that can be controlled via chat in multiplayer servers",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "test": "echo \"No tests configured\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/koboshchan/minecraft-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/koboshchan/minecraft-bot/issues"
+  },
+  "homepage": "https://github.com/koboshchan/minecraft-bot#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mineflayer": "^4.37.1"
+  }
+}
