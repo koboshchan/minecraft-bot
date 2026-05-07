@@ -14,6 +14,9 @@ const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
 const SERVER_IP = process.env.SERVER_IP;
 const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
 const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
+const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 1000);
+const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 1500);
+const RECONNECT_DELAY_MS = Number(process.env.RECONNECT_DELAY_MS || 10000);
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
     .split(',')
@@ -93,6 +96,27 @@ function tabComplete(bot, value) {
   });
 }
 
+function formatReason(reason) {
+  if (typeof reason === 'string') {
+    return reason;
+  }
+
+  try {
+    return JSON.stringify(reason);
+  } catch (_) {
+    return String(reason);
+  }
+}
+
+function sendAuthCommands(bot, password) {
+  setTimeout(() => {
+    bot.chat(`/register ${password}`);
+    setTimeout(() => {
+      bot.chat(`/login ${password}`);
+    }, Math.max(0, AUTH_LOGIN_DELAY_MS));
+  }, Math.max(0, AUTH_INITIAL_DELAY_MS));
+}
+
 function attachAutoAuthFlow(bot, serverIp) {
   let authTried = false;
 
@@ -107,10 +131,7 @@ function attachAutoAuthFlow(bot, serverIp) {
       if (AUTH_ANYWAYS) {
         const password = derivePassword(bot.username, serverIp);
         debugLog(`auth-run ${bot.username}: AUTH_ANYWAYS enabled, issuing /register then /login`);
-        bot.chat(`/register ${password}`);
-        setTimeout(() => {
-          bot.chat(`/login ${password}`);
-        }, 1500);
+        sendAuthCommands(bot, password);
         return;
       }
 
@@ -127,10 +148,7 @@ function attachAutoAuthFlow(bot, serverIp) {
 
       const password = derivePassword(bot.username, serverIp);
       debugLog(`auth-run ${bot.username}: issuing /register then /login`);
-      bot.chat(`/register ${password}`);
-      setTimeout(() => {
-        bot.chat(`/login ${password}`);
-      }, 1500);
+      sendAuthCommands(bot, password);
     } catch (error) {
       console.warn(`[${bot.username}] auth command check failed: ${error.message}`);
     }
@@ -166,8 +184,9 @@ function createBot(botName, serverConfig) {
   });
 
   bot.on('kicked', (reason) => {
-    console.log(`[${bot.username}] kicked: ${reason}`);
-    debugLog(`event kicked ${bot.username}`, reason);
+    const text = formatReason(reason);
+    console.log(`[${bot.username}] kicked: ${text}`);
+    debugLog(`event kicked ${bot.username}`, text);
   });
 
   bot.on('error', (error) => {
@@ -226,9 +245,18 @@ function parseControlCommand(message) {
 function main() {
   const serverConfig = parseServerAddress(SERVER_IP);
   debugLog(`config auth_anyways=${AUTH_ANYWAYS}`);
-  const commandCenter = createBot(CENTER_BOT_NAME, serverConfig);
+  debugLog(`config auth_initial_delay_ms=${AUTH_INITIAL_DELAY_MS} auth_login_delay_ms=${AUTH_LOGIN_DELAY_MS}`);
+  debugLog(`config reconnect_delay_ms=${RECONNECT_DELAY_MS}`);
 
-  commandCenter.on('chat', (username, message) => {
+  let shuttingDown = false;
+  let reconnectTimer = null;
+  let commandCenter = null;
+
+  function handleControlChat(username, message) {
+    if (!commandCenter) {
+      return;
+    }
+
     if (username === commandCenter.username) {
       return;
     }
@@ -275,9 +303,38 @@ function main() {
     debugLog(`command-result for ${username}: ${result}`);
 
     whisperFrom(commandCenter, username, result);
-  });
+  }
+
+  function connectCommandCenter() {
+    commandCenter = createBot(CENTER_BOT_NAME, serverConfig);
+    commandCenter.on('chat', handleControlChat);
+
+    commandCenter.on('end', () => {
+      if (shuttingDown) {
+        return;
+      }
+
+      if (reconnectTimer) {
+        return;
+      }
+
+      debugLog(`command-center reconnect scheduled in ${RECONNECT_DELAY_MS}ms`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectCommandCenter();
+      }, Math.max(1000, RECONNECT_DELAY_MS));
+    });
+  }
+
+  connectCommandCenter();
 
   process.on('SIGINT', () => {
+    shuttingDown = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
     debugLog('received SIGINT, shutting down bots and sorters');
     sortCommands.disableAllSorters();
     craftCommands.disableAllCrafters();
@@ -286,7 +343,9 @@ function main() {
       bot.end('Shutting down');
     });
 
-    commandCenter.end('Shutting down');
+    if (commandCenter) {
+      commandCenter.end('Shutting down');
+    }
     process.exit(0);
   });
 }

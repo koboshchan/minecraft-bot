@@ -8,6 +8,9 @@ services:
       ADMIN: ${ADMIN}
       CENTER_BOT_NAME: ${CENTER_BOT_NAME:-command-center}
       AUTH_ANYWAYS: ${AUTH_ANYWAYS:-0}
+      AUTH_INITIAL_DELAY_MS: ${AUTH_INITIAL_DELAY_MS:-1000}
+      AUTH_LOGIN_DELAY_MS: ${AUTH_LOGIN_DELAY_MS:-1500}
+      RECONNECT_DELAY_MS: ${RECONNECT_DELAY_MS:-10000}
     restart: unless-stopped
     volumes:
       - ./settings:/app/settings
