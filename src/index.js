@@ -114,13 +114,12 @@ function sleep(ms) {
 }
 
 async function waitForWorldReady(bot) {
-  await sleep(AUTH_WORLD_READY_WAIT_MS);
-
   const startedAt = Date.now();
   while (Date.now() - startedAt < 15000) {
+    const isPlayState = bot._client?.state === 'play';
     const hasWorld = Boolean(bot.world && bot.game?.dimension);
     const hasEntity = Boolean(bot.entity && bot.entity.position);
-    if (hasWorld && hasEntity) {
+    if (isPlayState && hasWorld && hasEntity) {
       return true;
     }
 
@@ -140,28 +139,28 @@ function sendAuthCommands(bot, password) {
 }
 
 function attachAutoAuthFlow(bot, serverIp) {
-  let authTried = false;
+  let authSent = false;
   let ended = false;
+  let authTimer = null;
 
-  bot.on('spawn', async () => {
-    if (authTried) {
+  async function runAuthAttempt(triggerReason) {
+    if (ended || authSent) {
       return;
     }
 
-    authTried = true;
-
     try {
       const worldReady = await waitForWorldReady(bot);
-      if (ended) {
+      if (ended || authSent) {
         return;
       }
 
-      debugLog(`auth-ready ${bot.username}: worldReady=${worldReady}`);
+      debugLog(`auth-ready ${bot.username}: worldReady=${worldReady} trigger=${triggerReason}`);
 
       if (AUTH_ANYWAYS) {
         const password = derivePassword(bot.username, serverIp);
         debugLog(`auth-run ${bot.username}: AUTH_ANYWAYS enabled, issuing /register then /login`);
         sendAuthCommands(bot, password);
+        authSent = true;
         return;
       }
 
@@ -179,13 +178,46 @@ function attachAutoAuthFlow(bot, serverIp) {
       const password = derivePassword(bot.username, serverIp);
       debugLog(`auth-run ${bot.username}: issuing /register then /login`);
       sendAuthCommands(bot, password);
+      authSent = true;
     } catch (error) {
       console.warn(`[${bot.username}] auth command check failed: ${error.message}`);
     }
+  }
+
+  function scheduleAuthAttempt(triggerReason) {
+    if (ended || authSent) {
+      return;
+    }
+
+    if (authTimer) {
+      clearTimeout(authTimer);
+      authTimer = null;
+    }
+
+    authTimer = setTimeout(() => {
+      authTimer = null;
+      runAuthAttempt(triggerReason).catch((error) => {
+        console.warn(`[${bot.username}] auth scheduling error: ${error.message}`);
+      });
+    }, AUTH_WORLD_READY_WAIT_MS);
+
+    debugLog(`auth-schedule ${bot.username}: trigger=${triggerReason} wait=${AUTH_WORLD_READY_WAIT_MS}ms`);
+  }
+
+  bot.on('spawn', () => {
+    scheduleAuthAttempt('spawn');
+  });
+
+  bot.on('respawn', () => {
+    scheduleAuthAttempt('respawn');
   });
 
   bot.on('end', () => {
     ended = true;
+    if (authTimer) {
+      clearTimeout(authTimer);
+      authTimer = null;
+    }
   });
 }
 
