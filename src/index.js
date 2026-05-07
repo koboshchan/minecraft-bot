@@ -156,6 +156,13 @@ function attachAutoAuthFlow(bot, serverIp) {
 
       debugLog(`auth-ready ${bot.username}: worldReady=${worldReady} trigger=${triggerReason}`);
 
+      // World can report ready during proxy transitions; wait an extra 5 seconds
+      // after readiness before issuing auth commands.
+      await sleep(AUTH_WORLD_READY_WAIT_MS);
+      if (ended || authSent) {
+        return;
+      }
+
       if (AUTH_ANYWAYS) {
         const password = derivePassword(bot.username, serverIp);
         debugLog(`auth-run ${bot.username}: AUTH_ANYWAYS enabled, issuing /register then /login`);
