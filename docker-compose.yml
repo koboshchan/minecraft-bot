@@ -5,6 +5,7 @@ services:
     image: ghcr.io/koboshchan/minecraft-bot:main
     environment:
       SERVER_IP: ${SERVER_IP}
+      MINECRAFT_VERSION: ${MINECRAFT_VERSION:-1.21}
       ADMIN: ${ADMIN}
       CENTER_BOT_NAME: ${CENTER_BOT_NAME:-command-center}
       AUTH_ANYWAYS: ${AUTH_ANYWAYS:-0}

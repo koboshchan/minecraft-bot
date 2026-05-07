@@ -12,6 +12,7 @@ const createCraftCommandController = require('./commands/craft');
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
 const SERVER_IP = process.env.SERVER_IP;
+const MINECRAFT_VERSION = process.env.MINECRAFT_VERSION || '1.21';
 const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
 const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
 const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 1000);
@@ -246,6 +247,7 @@ function createBot(botName, serverConfig) {
     host: serverConfig.host,
     port: serverConfig.port,
     username: botName,
+    version: MINECRAFT_VERSION,
     physicsEnabled: true
   });
 
@@ -329,6 +331,7 @@ function parseControlCommand(message) {
 function main() {
   const serverConfig = parseServerAddress(SERVER_IP);
   debugLog(`config auth_anyways=${AUTH_ANYWAYS}`);
+  debugLog(`config minecraft_version=${MINECRAFT_VERSION}`);
   debugLog(`config auth_world_ready_wait_ms=${AUTH_WORLD_READY_WAIT_MS}`);
   debugLog(`config auth_initial_delay_ms=${AUTH_INITIAL_DELAY_MS} auth_login_delay_ms=${AUTH_LOGIN_DELAY_MS}`);
   debugLog(`config reconnect_delay_ms=${RECONNECT_DELAY_MS}`);
