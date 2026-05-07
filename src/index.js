@@ -13,6 +13,7 @@ const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
 const SERVER_IP = process.env.SERVER_IP;
 const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
+const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
     .split(',')
@@ -103,6 +104,16 @@ function attachAutoAuthFlow(bot, serverIp) {
     authTried = true;
 
     try {
+      if (AUTH_ANYWAYS) {
+        const password = derivePassword(bot.username, serverIp);
+        debugLog(`auth-run ${bot.username}: AUTH_ANYWAYS enabled, issuing /register then /login`);
+        bot.chat(`/register ${password}`);
+        setTimeout(() => {
+          bot.chat(`/login ${password}`);
+        }, 1500);
+        return;
+      }
+
       const matches = await tabComplete(bot, '/');
       const commands = new Set(getCompletionStrings(matches));
       const hasRegister = commands.has('register');
