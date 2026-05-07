@@ -107,7 +107,8 @@ function createBot(botName, serverConfig) {
   const bot = mineflayer.createBot({
     host: serverConfig.host,
     port: serverConfig.port,
-    username: botName
+    username: botName,
+    physicsEnabled: true
   });
 
   attachAutoAuthFlow(bot, SERVER_IP);
