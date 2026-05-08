@@ -37,6 +37,7 @@ if (ADMIN_SET.size === 0) {
 }
 
 let sortCommands = null;
+let craftCommands = null;
 
 function debugLog(message, extra) {
   if (!DEBUG) {
@@ -298,16 +299,17 @@ sortCommands = createSortCommandController({
   debugLog
 });
 
-const saveLoadCommands = createSaveLoadController({
-  botCommands,
-  sortCommands,
-  serverConfig: parseServerAddress(SERVER_IP),
+craftCommands = createCraftCommandController({
+  getManagedBot: botCommands.getManagedBot,
+  hasManagedBot: botCommands.hasManagedBot,
   debugLog
 });
 
-const craftCommands = createCraftCommandController({
-  getManagedBot: botCommands.getManagedBot,
-  hasManagedBot: botCommands.hasManagedBot,
+const saveLoadCommands = createSaveLoadController({
+  botCommands,
+  sortCommands,
+  craftCommands,
+  serverConfig: parseServerAddress(SERVER_IP),
   debugLog
 });
 

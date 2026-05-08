@@ -2,9 +2,10 @@ const fs = require('fs');
 const path = require('path');
 
 const SETTINGS_DIR = path.resolve('./settings');
+const LOAD_JOIN_INTERVAL_MS = 1500;
 
 function createSaveLoadController(options) {
-  const { botCommands, sortCommands, serverConfig, debugLog = () => {} } = options;
+  const { botCommands, sortCommands, craftCommands, serverConfig, debugLog = () => {} } = options;
 
   function ensureSettingsDir() {
     if (!fs.existsSync(SETTINGS_DIR)) {
@@ -26,7 +27,8 @@ function createSaveLoadController(options) {
     const botNames = botCommands.getManagedBotNames();
     const bots = botNames.map((botName) => ({
       name: botName,
-      sorterEnabled: sortCommands.isSorterEnabled(botName)
+      sorterEnabled: sortCommands.isSorterEnabled(botName),
+      crafterEnabled: craftCommands ? craftCommands.isCrafterEnabled(botName) : false
     }));
 
     const data = { bots };
@@ -63,29 +65,51 @@ function createSaveLoadController(options) {
       return `Load failed: invalid format in ${name}.json`;
     }
 
-    const results = [];
+    const validEntries = data.bots.filter((entry) => entry && entry.name);
+    const existing = [];
+    const toAdd = [];
 
-    for (const entry of data.bots) {
-      if (!entry.name) {
-        continue;
-      }
-
-      if (!botCommands.hasManagedBot(entry.name)) {
-        const addResult = botCommands.handleBotCommand(['add', entry.name], { serverConfig });
-        results.push(addResult);
-        debugLog(`load bot-add: ${entry.name}`, addResult);
+    for (const entry of validEntries) {
+      if (botCommands.hasManagedBot(entry.name)) {
+        existing.push(entry);
       } else {
-        results.push(`${entry.name} already exists`);
+        toAdd.push(entry);
       }
+    }
 
+    const applyFeatures = (entry) => {
       if (entry.sorterEnabled) {
         const sortResult = sortCommands.handleSortCommand([entry.name, 'enable']);
         debugLog(`load sort-enable: ${entry.name}`, sortResult);
       }
+
+      if (entry.crafterEnabled && craftCommands) {
+        const craftResult = craftCommands.handleCraftCommand([entry.name, 'enable']);
+        debugLog(`load craft-enable: ${entry.name}`, craftResult);
+      }
+    };
+
+    for (const entry of existing) {
+      debugLog(`load bot-exists: ${entry.name}`);
+      applyFeatures(entry);
     }
 
-    debugLog(`load success: ${name}`, results);
-    return `Loaded ${data.bots.length} bot(s) from ${name}.json`;
+    toAdd.forEach((entry, index) => {
+      const delay = index * LOAD_JOIN_INTERVAL_MS;
+      setTimeout(() => {
+        const addResult = botCommands.handleBotCommand(['add', entry.name], { serverConfig });
+        debugLog(`load bot-add: ${entry.name}`, addResult);
+        applyFeatures(entry);
+      }, delay);
+    });
+
+    debugLog(`load scheduled: ${name}`, {
+      existing: existing.length,
+      toAdd: toAdd.length,
+      joinIntervalMs: LOAD_JOIN_INTERVAL_MS
+    });
+
+    return `Load scheduled from ${name}.json: ${existing.length} existing bot(s) restored now, ${toAdd.length} bot(s) joining every ${LOAD_JOIN_INTERVAL_MS}ms`;
   }
 
   return {
