@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SETTINGS_DIR = path.resolve('./settings');
-const LOAD_JOIN_INTERVAL_MS = 1500;
+const DEFAULT_LOAD_JOIN_INTERVAL_MS = 5000;
 
 function createSaveLoadController(options) {
   const { botCommands, sortCommands, craftCommands, serverConfig, debugLog = () => {} } = options;
@@ -46,8 +46,19 @@ function createSaveLoadController(options) {
 
   function handleLoadCommand(parts) {
     const name = parts[0];
+    const waitMsRaw = parts[1];
     if (!name) {
-      return 'Usage: +load <name>';
+      return 'Usage: +load <name> [waitMs]';
+    }
+
+    let waitMs = DEFAULT_LOAD_JOIN_INTERVAL_MS;
+    if (typeof waitMsRaw !== 'undefined') {
+      const parsed = Number(waitMsRaw);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return 'Usage: +load <name> [waitMs] (waitMs must be a non-negative number)';
+      }
+
+      waitMs = Math.floor(parsed);
     }
 
     const filePath = settingsPath(name);
@@ -95,8 +106,10 @@ function createSaveLoadController(options) {
     }
 
     toAdd.forEach((entry, index) => {
-      const delay = index * LOAD_JOIN_INTERVAL_MS;
+      const delay = index * waitMs;
+      debugLog(`load bot-join scheduled: ${entry.name} in ${delay}ms`);
       setTimeout(() => {
+        console.log(`[load] joining bot ${entry.name} (${index + 1}/${toAdd.length})`);
         const addResult = botCommands.handleBotCommand(['add', entry.name], { serverConfig });
         debugLog(`load bot-add: ${entry.name}`, addResult);
         applyFeatures(entry);
@@ -106,10 +119,10 @@ function createSaveLoadController(options) {
     debugLog(`load scheduled: ${name}`, {
       existing: existing.length,
       toAdd: toAdd.length,
-      joinIntervalMs: LOAD_JOIN_INTERVAL_MS
+      joinIntervalMs: waitMs
     });
 
-    return `Load scheduled from ${name}.json: ${existing.length} existing bot(s) restored now, ${toAdd.length} bot(s) joining every ${LOAD_JOIN_INTERVAL_MS}ms`;
+    return `Load scheduled from ${name}.json: ${existing.length} existing bot(s) restored now, ${toAdd.length} bot(s) joining every ${waitMs}ms`;
   }
 
   return {

@@ -40,7 +40,11 @@ These are sent in in-game chat:
 +say <botname> <message>
 +sort <botname> enable
 +sort <botname> disable
++save <name>
++load <name> [waitMs]
 ```
+
+`+load` defaults to `5000ms` between bot joins when `waitMs` is omitted.
 
 If a non-admin runs a command, they receive:
 

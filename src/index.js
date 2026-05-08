@@ -254,25 +254,29 @@ function createBot(botName, serverConfig) {
   attachAutoAuthFlow(bot, SERVER_IP);
 
   bot.on('login', () => {
-    console.log(`[${bot.username}] logged in`);
-    debugLog(`event login ${bot.username}`);
+    const displayName = bot.username || botName;
+    console.log(`[${displayName}] logged in`);
+    debugLog(`event login ${displayName}`);
   });
 
   bot.on('end', () => {
+    const displayName = bot.username || botName;
     if (sortCommands) {
-      sortCommands.disableSorter(bot.username);
+      sortCommands.disableSorter(botName);
     }
     if (craftCommands) {
-      craftCommands.disableCrafter(bot.username);
+      craftCommands.disableCrafter(botName);
     }
-    console.log(`[${bot.username}] disconnected`);
-    debugLog(`event end ${bot.username}`);
+    console.log(`[${displayName}] disconnected`);
+    debugLog(`event end ${displayName}`);
   });
 
   bot.on('kicked', (reason) => {
+    const displayName = bot.username || botName;
     const text = formatReason(reason);
-    console.log(`[${bot.username}] kicked: ${text}`);
-    debugLog(`event kicked ${bot.username}`, text);
+    bot.__lastKickReasonText = text;
+    console.log(`[${displayName}] kicked: ${text}`);
+    debugLog(`event kicked ${displayName}`, text);
   });
 
   bot.on('error', (error) => {
@@ -288,6 +292,9 @@ const botCommands = createBotCommandManager({
   onBeforeRemove: (botName) => {
     if (sortCommands) {
       sortCommands.disableSorter(botName);
+    }
+    if (craftCommands) {
+      craftCommands.disableCrafter(botName);
     }
   }
 });
