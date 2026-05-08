@@ -17,6 +17,20 @@ function createSortCommandController(options) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function sleepJitter(base, jitter) {
+    const delta = Math.floor((Math.random() * 2 - 1) * jitter);
+    return sleep(Math.max(50, base + delta));
+  }
+
+  // Adds tiny random noise to the look target so yaw/pitch are never identical
+  // across repeated looks at the same entity (defeats AimModulo360 checks).
+  async function lookAtJitter(bot, basePos) {
+    const jx = (Math.random() * 2 - 1) * 0.07;
+    const jy = (Math.random() * 2 - 1) * 0.05;
+    const jz = (Math.random() * 2 - 1) * 0.07;
+    await bot.lookAt(basePos.offset(jx, jy, jz), true).catch(() => {});
+  }
+
   function tossStackAsync(bot, item, beforeSignature) {
     return new Promise((resolve, reject) => {
       let finished = false;
@@ -446,8 +460,8 @@ function createSortCommandController(options) {
           // Only turn (and wait for physics) when the target frame changes.
           const needsTurn = target.entity.id !== lastFrameEntityId;
           if (needsTurn) {
-            await bot.lookAt(target.entity.position.offset(0, 0.5, 0), true).catch(() => {});
-            await sleep(150);
+            await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
+            await sleepJitter(200, 80);
           }
           lastFrameEntityId = target.entity.id;
 

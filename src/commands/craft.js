@@ -15,6 +15,21 @@ function createCraftCommandController(options) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Returns a delay of `base` ± up to `jitter` ms, minimum 50ms.
+  function sleepJitter(base, jitter) {
+    const delta = Math.floor((Math.random() * 2 - 1) * jitter);
+    return sleep(Math.max(50, base + delta));
+  }
+
+  // Looks at `basePos` with tiny random noise so yaw/pitch are never identical
+  // across repeated looks at the same entity (defeats AimModulo360 checks).
+  async function lookAtJitter(bot, basePos) {
+    const jx = (Math.random() * 2 - 1) * 0.07;
+    const jy = (Math.random() * 2 - 1) * 0.05;
+    const jz = (Math.random() * 2 - 1) * 0.07;
+    await bot.lookAt(basePos.offset(jx, jy, jz), true).catch(() => {});
+  }
+
   function inventorySignature(bot) {
     return bot.inventory.items()
       .map((item) => `${item.slot}:${item.type}:${item.count}`)
@@ -285,8 +300,8 @@ function createCraftCommandController(options) {
       );
 
       // Always face the item frame first; craft and toss without changing look direction.
-      await bot.lookAt(targetFrame.entity.position.offset(0, 0.5, 0), true).catch(() => {});
-      await sleep(150);
+      await lookAtJitter(bot, targetFrame.entity.position.offset(0, 0.5, 0));
+      await sleepJitter(200, 100);
 
       const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
       if (recipes.length === 0) {
@@ -310,7 +325,7 @@ function createCraftCommandController(options) {
       // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
         bot.closeWindow(bot.currentWindow);
-        await sleep(200);
+        await sleepJitter(250, 100);
       }
 
       debugLog(`craft pass ${bot.username}: craftCount=${craftCount}`);
@@ -320,7 +335,7 @@ function createCraftCommandController(options) {
       for (let i = 0; i < craftCount && state.enabled; i++) {
         if (bot.currentWindow) {
           bot.closeWindow(bot.currentWindow);
-          await sleep(100);
+          await sleepJitter(150, 75);
         }
 
         const snapBefore = inventorySignature(bot);
@@ -330,7 +345,9 @@ function createCraftCommandController(options) {
         }
 
         await bot.craft(recipe, 1, craftingTable);
-        await sleep(100);
+        // Minimum 150ms (3 ticks) between craft ops — prevents TickTimer flags
+        // from packets arriving faster than the server's tick window expects.
+        await sleepJitter(220, 70);
 
         // Toss only types that increased since this single craft.
         const newTypes = [];
@@ -340,6 +357,9 @@ function createCraftCommandController(options) {
             newTypes.push(item.type);
           }
         }
+
+        // Small pause before tossing — humans don't instantly drop items.
+        await sleepJitter(120, 60);
 
         for (const type of newTypes) {
           let stagnant = 0;
@@ -371,7 +391,7 @@ function createCraftCommandController(options) {
       try {
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
       } catch (_) {}
-      await sleep(3000);
+      await sleepJitter(3500, 800);
     } finally {
       state.running = false;
     }
@@ -383,6 +403,16 @@ function createCraftCommandController(options) {
     runCraftPass(bot, state).catch((error) => {
       console.warn(`[${bot.username}] craft pass failed: ${error.message}`);
     });
+  }
+
+  // Schedule the next craft pass with a randomised delay (2000ms ± 600ms).
+  function scheduleNext(bot, state) {
+    if (!state.enabled) return;
+    const delay = 2000 + Math.floor((Math.random() * 2 - 1) * 600);
+    state.timeout = setTimeout(() => {
+      scheduleCraftPass(bot, state);
+      scheduleNext(bot, state);
+    }, delay);
   }
 
   function enableCrafter(botName) {
@@ -397,8 +427,7 @@ function createCraftCommandController(options) {
 
     const state = { enabled: true, running: false, bot };
 
-    const interval = setInterval(() => scheduleCraftPass(bot, state), 2000);
-    state.interval = interval;
+    scheduleNext(bot, state);
 
     craftStates.set(botName, state);
     debugLog(`craft enabled for ${botName}`);
@@ -413,7 +442,7 @@ function createCraftCommandController(options) {
     }
 
     state.enabled = false;
-    if (state.interval) clearInterval(state.interval);
+    if (state.timeout) clearTimeout(state.timeout);
     craftStates.delete(botName);
     debugLog(`craft disabled for ${botName}`);
     return true;
