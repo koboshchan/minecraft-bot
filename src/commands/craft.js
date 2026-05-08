@@ -266,6 +266,38 @@ function createCraftCommandController(options) {
     return max === Infinity ? 0 : max;
   }
 
+  function getRecipeIngredientIds(recipe) {
+    const ids = new Set();
+    const ingredients = [];
+    if (recipe.inShape) {
+      for (const row of recipe.inShape) {
+        for (const ing of row) {
+          if (ing && ing.id !== -1) ingredients.push(ing);
+        }
+      }
+    } else if (recipe.ingredients) {
+      ingredients.push(...recipe.ingredients);
+    }
+    for (const ing of ingredients) {
+      if (ing && ing.id !== -1) ids.add(ing.id);
+    }
+    return ids;
+  }
+
+  async function tossNonIngredients(bot, recipe, state) {
+    const keep = getRecipeIngredientIds(recipe);
+    const tossTypes = [...new Set(
+      bot.inventory.items()
+        .filter((it) => !keep.has(it.type))
+        .map((it) => it.type)
+    )];
+
+    for (const type of tossTypes) {
+      if (!state.enabled) break;
+      await tossAllOfType(bot, type, state);
+    }
+  }
+
   async function tossAllOfType(bot, itemType, state) {
     let stagnant = 0;
 
@@ -330,17 +362,31 @@ function createCraftCommandController(options) {
       await lookAtJitter(bot, targetFrame.entity.position.offset(0, 0.5, 0));
       await sleepJitter(150, 70);
 
-      const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
-      if (recipes.length === 0) {
-        debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
-        return;
+      // Use cached recipe to avoid re-querying every pass. Clear cache when target changes.
+      if (state.cachedRecipeItemId !== targetItemId) {
+        state.cachedRecipe = null;
+        state.cachedRecipeItemId = null;
       }
 
-      const recipe = recipes[0];
+      if (!state.cachedRecipe) {
+        const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
+        if (recipes.length === 0) {
+          debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
+          return;
+        }
+        state.cachedRecipe = recipes[0];
+        state.cachedRecipeItemId = targetItemId;
+        debugLog(`craft pass ${bot.username}: recipe cached for item ${targetItemId}`);
+      }
+
+      const recipe = state.cachedRecipe;
       debugLog(`craft pass ${bot.username}: crafting with recipe`, {
         result: recipe.result,
         requiresTable: recipe.requiresTable
       });
+
+      // Toss any inventory items that are not ingredients for this recipe.
+      await tossNonIngredients(bot, recipe, state);
 
       const resultCount = Math.max(1, Number(recipe.result?.count) || 1);
       const craftsFor64 = Math.ceil(64 / resultCount);
@@ -432,7 +478,7 @@ function createCraftCommandController(options) {
       return { ok: false, message: `Bot ${botName} not found` };
     }
 
-    const state = { enabled: true, running: false, bot };
+    const state = { enabled: true, running: false, bot, cachedRecipe: null, cachedRecipeItemId: null };
 
     scheduleNext(bot, state);
 
