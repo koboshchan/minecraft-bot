@@ -22,6 +22,6 @@
   "homepage": "https://github.com/koboshchan/minecraft-bot#readme",
   "dependencies": {
     "dotenv": "^17.4.2",
-    "mineflayer": "^4.37.1"
+    "mineflayer": "https://codeload.github.com/plainprince/mineflayer/tar.gz/fix-velocity-configuration-phase"
   }
 }
