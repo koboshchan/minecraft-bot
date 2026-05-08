@@ -293,29 +293,6 @@ function createCraftCommandController(options) {
     }
   }
 
-  function countFreeInventorySlots(bot) {
-    const inventory = bot.inventory;
-    if (!inventory || !Array.isArray(inventory.slots)) return 0;
-
-    const start = Number.isFinite(inventory.inventoryStart) ? inventory.inventoryStart : 9;
-    const end = Number.isFinite(inventory.inventoryEnd) ? inventory.inventoryEnd : 45;
-
-    let free = 0;
-    for (let slot = start; slot < end; slot++) {
-      if (!inventory.slots[slot]) free += 1;
-    }
-
-    return free;
-  }
-
-  function countItemInInventory(bot, itemType) {
-    let total = 0;
-    for (const item of bot.inventory.items()) {
-      if (item.type === itemType) total += item.count;
-    }
-    return total;
-  }
-
   async function runCraftPass(bot, state) {
     if (!state.enabled || state.running) return;
     if (!bot.entity || !bot.inventory) return;
@@ -351,7 +328,7 @@ function createCraftCommandController(options) {
 
       // Always face the item frame first; craft and toss without changing look direction.
       await lookAtJitter(bot, targetFrame.entity.position.offset(0, 0.5, 0));
-      await sleepJitter(200, 100);
+      await sleepJitter(150, 70);
 
       const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
       if (recipes.length === 0) {
@@ -386,46 +363,31 @@ function createCraftCommandController(options) {
 
       debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (target output=64)`);
 
-      // Craft in small batches, then pick up and toss all crafted result stacks.
-      for (let i = 0; i < craftCount && state.enabled; i++) {
+      // Craft the full stack in one call — equivalent to shift-clicking the result slot.
+      try {
+        await bot.craft(recipe, craftCount, craftingTable);
+      } catch (error) {
+        const message = String(error?.message || '').toLowerCase();
+        const inventoryLikelyFull =
+          message.includes('inventory') || message.includes('full') || message.includes('space');
+
+        if (!inventoryLikelyFull) throw error;
+
+        // Inventory full mid-craft: drain output and retry the whole batch once.
+        debugLog(`craft pass ${bot.username}: inventory tight, draining then retrying`);
+        await tossAllOfType(bot, recipe.result.id, state);
+        await sleepJitter(130, 60);
+
         if (bot.currentWindow) {
           bot.closeWindow(bot.currentWindow);
-          await sleepJitter(150, 75);
+          await sleepJitter(100, 50);
         }
 
-        try {
-          await bot.craft(recipe, 1, craftingTable);
-        } catch (error) {
-          const message = String(error?.message || '').toLowerCase();
-          const inventoryLikelyFull =
-            message.includes('inventory') || message.includes('full') || message.includes('space');
-
-          if (!inventoryLikelyFull) throw error;
-
-          debugLog(`craft pass ${bot.username}: inventory tight mid-batch, draining output`);
-          await tossAllOfType(bot, recipe.result.id, state);
-          await sleepJitter(180, 70);
-
-          // Retry this craft index after making space.
-          i -= 1;
-          continue;
-        }
-
-        // Minimum 150ms (3 ticks) between craft ops — prevents TickTimer flags
-        // from packets arriving faster than the server's tick window expects.
-        await sleepJitter(220, 70);
-
-        // Drain crafted output before inventory pressure can block future crafts.
-        const freeSlots = countFreeInventorySlots(bot);
-        const outputCount = countItemInInventory(bot, recipe.result.id);
-        if (freeSlots <= 1 || outputCount >= 48) {
-          await tossAllOfType(bot, recipe.result.id, state);
-          await sleepJitter(130, 60);
-        }
+        await bot.craft(recipe, craftCount, craftingTable);
       }
 
       // Small pause before tossing crafted output.
-      await sleepJitter(140, 60);
+      await sleepJitter(100, 40);
 
       await tossAllOfType(bot, recipe.result.id, state);
 
@@ -450,10 +412,10 @@ function createCraftCommandController(options) {
     });
   }
 
-  // Schedule the next craft pass with a randomised delay (2000ms ± 600ms).
+  // Schedule the next craft pass with a randomised delay (1200ms ± 400ms).
   function scheduleNext(bot, state) {
     if (!state.enabled) return;
-    const delay = 2000 + Math.floor((Math.random() * 2 - 1) * 600);
+    const delay = 1200 + Math.floor((Math.random() * 2 - 1) * 400);
     state.timeout = setTimeout(() => {
       scheduleCraftPass(bot, state);
       scheduleNext(bot, state);
