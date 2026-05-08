@@ -266,6 +266,56 @@ function createCraftCommandController(options) {
     return max === Infinity ? 0 : max;
   }
 
+  async function tossAllOfType(bot, itemType, state) {
+    let stagnant = 0;
+
+    while (state.enabled) {
+      const stack = bot.inventory.items().find((it) => it.type === itemType);
+      if (!stack) break;
+
+      const beforeToss = inventorySignature(bot);
+      let tossResult;
+      try {
+        tossResult = await tossStackAsync(bot, stack, beforeToss);
+      } catch (err) {
+        debugLog(`craft toss failed ${bot.username}: ${err.message}`);
+        break;
+      }
+
+      if (!tossResult.changed) {
+        stagnant += 1;
+        if (stagnant >= 2) break;
+      } else {
+        stagnant = 0;
+      }
+
+      await sleepJitter(110, 50);
+    }
+  }
+
+  function countFreeInventorySlots(bot) {
+    const inventory = bot.inventory;
+    if (!inventory || !Array.isArray(inventory.slots)) return 0;
+
+    const start = Number.isFinite(inventory.inventoryStart) ? inventory.inventoryStart : 9;
+    const end = Number.isFinite(inventory.inventoryEnd) ? inventory.inventoryEnd : 45;
+
+    let free = 0;
+    for (let slot = start; slot < end; slot++) {
+      if (!inventory.slots[slot]) free += 1;
+    }
+
+    return free;
+  }
+
+  function countItemInInventory(bot, itemType) {
+    let total = 0;
+    for (const item of bot.inventory.items()) {
+      if (item.type === itemType) total += item.count;
+    }
+    return total;
+  }
+
   async function runCraftPass(bot, state) {
     if (!state.enabled || state.running) return;
     if (!bot.entity || !bot.inventory) return;
@@ -315,12 +365,18 @@ function createCraftCommandController(options) {
         requiresTable: recipe.requiresTable
       });
 
-      const stackSize = Math.floor(64 / (recipe.result.count || 1));
-      const craftCount = Math.min(stackSize, maxCraftableCount(bot, recipe));
-      if (craftCount <= 0) {
-        debugLog(`craft pass ${bot.username}: not enough ingredients`);
+      const resultCount = Math.max(1, Number(recipe.result?.count) || 1);
+      const craftsFor64 = Math.ceil(64 / resultCount);
+      const maxCrafts = maxCraftableCount(bot, recipe);
+
+      if (maxCrafts < craftsFor64) {
+        debugLog(
+          `craft pass ${bot.username}: not enough ingredients for 64 output (need crafts=${craftsFor64}, have=${maxCrafts})`
+        );
         return;
       }
+
+      const craftCount = craftsFor64;
 
       // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
@@ -328,61 +384,50 @@ function createCraftCommandController(options) {
         await sleepJitter(250, 100);
       }
 
-      debugLog(`craft pass ${bot.username}: craftCount=${craftCount}`);
+      debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (target output=64)`);
 
-      // Craft one at a time, tossing immediately after each craft so items never
-      // build up in inventory (avoids confusing ingredients with output).
+      // Craft in small batches, then pick up and toss all crafted result stacks.
       for (let i = 0; i < craftCount && state.enabled; i++) {
         if (bot.currentWindow) {
           bot.closeWindow(bot.currentWindow);
           await sleepJitter(150, 75);
         }
 
-        const snapBefore = inventorySignature(bot);
-        const countSnap = new Map();
-        for (const item of bot.inventory.items()) {
-          countSnap.set(item.type, (countSnap.get(item.type) || 0) + item.count);
+        try {
+          await bot.craft(recipe, 1, craftingTable);
+        } catch (error) {
+          const message = String(error?.message || '').toLowerCase();
+          const inventoryLikelyFull =
+            message.includes('inventory') || message.includes('full') || message.includes('space');
+
+          if (!inventoryLikelyFull) throw error;
+
+          debugLog(`craft pass ${bot.username}: inventory tight mid-batch, draining output`);
+          await tossAllOfType(bot, recipe.result.id, state);
+          await sleepJitter(180, 70);
+
+          // Retry this craft index after making space.
+          i -= 1;
+          continue;
         }
 
-        await bot.craft(recipe, 1, craftingTable);
         // Minimum 150ms (3 ticks) between craft ops — prevents TickTimer flags
         // from packets arriving faster than the server's tick window expects.
         await sleepJitter(220, 70);
 
-        // Toss only types that increased since this single craft.
-        const newTypes = [];
-        for (const item of bot.inventory.items()) {
-          const before = countSnap.get(item.type) || 0;
-          if (item.count > before && !newTypes.includes(item.type)) {
-            newTypes.push(item.type);
-          }
-        }
-
-        // Small pause before tossing — humans don't instantly drop items.
-        await sleepJitter(120, 60);
-
-        for (const type of newTypes) {
-          let stagnant = 0;
-          while (state.enabled) {
-            const stack = bot.inventory.items().find((it) => it.type === type);
-            if (!stack) break;
-            const beforeToss = inventorySignature(bot);
-            let tossResult;
-            try {
-              tossResult = await tossStackAsync(bot, stack, beforeToss);
-            } catch (err) {
-              debugLog(`craft toss failed ${bot.username}: ${err.message}`);
-              break;
-            }
-            if (!tossResult.changed) {
-              stagnant += 1;
-              if (stagnant >= 2) break;
-            } else {
-              stagnant = 0;
-            }
-          }
+        // Drain crafted output before inventory pressure can block future crafts.
+        const freeSlots = countFreeInventorySlots(bot);
+        const outputCount = countItemInInventory(bot, recipe.result.id);
+        if (freeSlots <= 1 || outputCount >= 48) {
+          await tossAllOfType(bot, recipe.result.id, state);
+          await sleepJitter(130, 60);
         }
       }
+
+      // Small pause before tossing crafted output.
+      await sleepJitter(140, 60);
+
+      await tossAllOfType(bot, recipe.result.id, state);
 
       debugLog(`craft pass ${bot.username}: done`);
     } catch (error) {
