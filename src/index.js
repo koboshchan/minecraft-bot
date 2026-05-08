@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const mineflayer = require('mineflayer');
 const createBotCommandManager = require('./commands/bot');
 const handleSayCommand = require('./commands/say');
-const handleSlashCommand = require('./commands/command');
 const createSortCommandController = require('./commands/sort');
 const createSaveLoadController = require('./commands/save');
 const createCraftCommandController = require('./commands/craft');
@@ -370,11 +369,6 @@ function main() {
       result = botCommands.handleBotCommand(parsed.parts, { serverConfig });
     } else if (parsed.command === 'say') {
       result = handleSayCommand(parsed.parts, {
-        getManagedBot: botCommands.getManagedBot,
-        debugLog
-      });
-    } else if (parsed.command === 'command') {
-      result = handleSlashCommand(parsed.parts, {
         getManagedBot: botCommands.getManagedBot,
         debugLog
       });

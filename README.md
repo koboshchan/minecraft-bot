@@ -9,10 +9,9 @@ The command-center bot only listens to chat commands starting with `+`, and cont
 - Admin-only chat commands
 - Managed bot instances (`+bot add`, `+bot remove`, `+bot list`)
 - Send chat as a managed bot (`+say`)
-- Execute slash commands as a managed bot (`+command`)
 - Auto register/login detection for each joining bot using deterministic password:
-	- password = first 8 chars of hex sha256(botname + serverip + "bot")
-	- runs `/register <pass>` then `/login <pass>` when both commands exist
+  - password = first 8 chars of hex sha256(botname + serverip + "bot")
+  - runs `/register <pass>` then `/login <pass>` when both commands exist
 - Replies to command sender via `/w <username> <result>`
 
 ## Environment
@@ -39,7 +38,6 @@ These are sent in in-game chat:
 +bot list
 
 +say <botname> <message>
-+command <botname> /command args
 +sort <botname> enable
 +sort <botname> disable
 ```
