@@ -40,6 +40,11 @@ These are sent in in-game chat:
 +say <botname> <message>
 +sort <botname> enable
 +sort <botname> disable
++eventreactor <botname> enable
++eventreactor <botname> disable
++eventreactor <botname> status
++eventreactor <botname> set <event|reaction|message|command|feature|health|cooldown> <value>
++er <botname> ...
 +save <name>
 +load <name> [waitMs]
 ```

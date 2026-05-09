@@ -7,6 +7,7 @@ const handleSayCommand = require('./commands/say');
 const createSortCommandController = require('./commands/sort');
 const createSaveLoadController = require('./commands/save');
 const createCraftCommandController = require('./commands/craft');
+const createEventReactorController = require('./commands/eventreactor');
 
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
@@ -37,6 +38,7 @@ if (ADMIN_SET.size === 0) {
 
 let sortCommands = null;
 let craftCommands = null;
+let eventReactorCommands = null;
 
 function debugLog(message, extra) {
   if (!DEBUG) {
@@ -267,6 +269,9 @@ function createBot(botName, serverConfig) {
     if (craftCommands) {
       craftCommands.disableCrafter(botName);
     }
+    if (eventReactorCommands) {
+      eventReactorCommands.disableEventReactor(botName);
+    }
     console.log(`[${displayName}] disconnected`);
     debugLog(`event end ${displayName}`);
   });
@@ -296,6 +301,9 @@ const botCommands = createBotCommandManager({
     if (craftCommands) {
       craftCommands.disableCrafter(botName);
     }
+    if (eventReactorCommands) {
+      eventReactorCommands.disableEventReactor(botName);
+    }
   }
 });
 
@@ -308,6 +316,14 @@ sortCommands = createSortCommandController({
 craftCommands = createCraftCommandController({
   getManagedBot: botCommands.getManagedBot,
   hasManagedBot: botCommands.hasManagedBot,
+  debugLog
+});
+
+eventReactorCommands = createEventReactorController({
+  getManagedBot: botCommands.getManagedBot,
+  hasManagedBot: botCommands.hasManagedBot,
+  sortCommands,
+  craftCommands,
   debugLog
 });
 
@@ -387,6 +403,8 @@ function main() {
       result = saveLoadCommands.handleLoadCommand(parsed.parts);
     } else if (parsed.command === 'craft') {
       result = craftCommands.handleCraftCommand(parsed.parts);
+    } else if (parsed.command === 'eventreactor' || parsed.command === 'er') {
+      result = eventReactorCommands.handleEventReactorCommand(parsed.parts);
     } else {
       result = 'Unknown command';
     }
@@ -429,6 +447,7 @@ function main() {
     debugLog('received SIGINT, shutting down bots and sorters');
     sortCommands.disableAllSorters();
     craftCommands.disableAllCrafters();
+    eventReactorCommands.disableAllEventReactors();
 
     botCommands.forEachManagedBot((bot) => {
       bot.end('Shutting down');
