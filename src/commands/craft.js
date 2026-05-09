@@ -232,13 +232,17 @@ function createCraftCommandController(options) {
     return null;
   }
 
-  function maxCraftableCount(bot, recipe) {
-    const counts = new Map();
-    for (const item of bot.inventory.items()) {
-      counts.set(item.type, (counts.get(item.type) || 0) + item.count);
+  function getRecipeRequirementCounts(recipe) {
+    const required = new Map();
+
+    if (Array.isArray(recipe.delta) && recipe.delta.length > 0) {
+      for (const delta of recipe.delta) {
+        if (!delta || delta.id == null || delta.id === -1 || delta.count >= 0) continue;
+        required.set(delta.id, (required.get(delta.id) || 0) + Math.abs(delta.count));
+      }
+      return required;
     }
 
-    const required = new Map();
     const ingredients = [];
     if (recipe.inShape) {
       for (const row of recipe.inShape) {
@@ -255,11 +259,16 @@ function createCraftCommandController(options) {
       required.set(ing.id, (required.get(ing.id) || 0) + 1);
     }
 
+    return required;
+  }
+
+  function maxCraftableCount(bot, recipe) {
+    const required = getRecipeRequirementCounts(recipe);
     if (required.size === 0) return 0;
 
     let max = Infinity;
     for (const [id, needed] of required) {
-      const have = counts.get(id) || 0;
+      const have = bot.inventory.count(id, null);
       max = Math.min(max, Math.floor(have / needed));
     }
 
@@ -267,21 +276,7 @@ function createCraftCommandController(options) {
   }
 
   function getRecipeIngredientIds(recipe) {
-    const ids = new Set();
-    const ingredients = [];
-    if (recipe.inShape) {
-      for (const row of recipe.inShape) {
-        for (const ing of row) {
-          if (ing && ing.id !== -1) ingredients.push(ing);
-        }
-      }
-    } else if (recipe.ingredients) {
-      ingredients.push(...recipe.ingredients);
-    }
-    for (const ing of ingredients) {
-      if (ing && ing.id !== -1) ids.add(ing.id);
-    }
-    return ids;
+    return new Set(getRecipeRequirementCounts(recipe).keys());
   }
 
   async function tossNonIngredients(bot, recipe, state) {
@@ -432,9 +427,13 @@ function createCraftCommandController(options) {
       const maxCrafts = maxCraftableCount(bot, recipe);
 
       if (maxCrafts <= 0) {
-        debugLog(
-          `craft pass ${bot.username}: no ingredients available to craft`
-        );
+        const requirements = [...getRecipeRequirementCounts(recipe).entries()]
+          .map(([id, needed]) => `${id}x${needed}`)
+          .join(', ');
+        debugLog(`craft pass ${bot.username}: no ingredients available to craft`, {
+          requirements,
+          inventoryItems: bot.inventory.items().map((item) => `${item.type}x${item.count}`)
+        });
         return;
       }
 
