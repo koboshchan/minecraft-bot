@@ -429,17 +429,16 @@ function createCraftCommandController(options) {
       });
 
       const resultCount = Math.max(1, Number(recipe.result?.count) || 1);
-      const craftsFor64 = Math.ceil(64 / resultCount);
       const maxCrafts = maxCraftableCount(bot, recipe);
 
-      if (maxCrafts < craftsFor64) {
+      if (maxCrafts <= 0) {
         debugLog(
-          `craft pass ${bot.username}: not enough ingredients for 64 output (need crafts=${craftsFor64}, have=${maxCrafts})`
+          `craft pass ${bot.username}: no ingredients available to craft`
         );
         return;
       }
 
-      const craftCount = craftsFor64;
+      const craftCount = maxCrafts;
 
       // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
@@ -447,9 +446,9 @@ function createCraftCommandController(options) {
         await sleepJitter(250, 100);
       }
 
-      debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (target output=64)`);
+      debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (crafting all available)`);
 
-      // Craft the full stack in one call — equivalent to shift-clicking the result slot.
+      // Craft all available — equivalent to shift-clicking the result slot.
       try {
         await bot.craft(recipe, craftCount, craftingTable);
       } catch (error) {
@@ -459,7 +458,7 @@ function createCraftCommandController(options) {
 
         if (!inventoryLikelyFull) throw error;
 
-        // Inventory full mid-craft: drain output via offhand and retry the whole batch once.
+        // Inventory full mid-craft: drain output and retry the whole batch once.
         debugLog(`craft pass ${bot.username}: inventory tight, draining then retrying`);
         await tossViaOffhand(bot, recipe.result.id, state);
         await sleepJitter(130, 60);
@@ -472,7 +471,7 @@ function createCraftCommandController(options) {
         await bot.craft(recipe, craftCount, craftingTable);
       }
 
-      // Move crafted output to offhand and toss.
+      // Toss crafted output.
       await sleepJitter(100, 40);
 
       await tossViaOffhand(bot, recipe.result.id, state);
@@ -501,7 +500,8 @@ function createCraftCommandController(options) {
     });
   }
 
-  // Schedule the next craft pass with a randomised delay (5-15 ticks / 250-750ms).
+  // Schedule the next craft pass with a fast randomised delay (5-15 ticks / 250-750ms).
+  // Always uses fast cycle regardless of craft success/failure.
   function scheduleNext(bot, state) {
     if (!state.enabled) return;
     const delay = 500 + Math.floor((Math.random() * 2 - 1) * 250);
