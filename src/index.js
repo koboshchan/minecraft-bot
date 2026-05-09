@@ -15,10 +15,10 @@ const SERVER_IP = process.env.SERVER_IP;
 const MINECRAFT_VERSION = process.env.MINECRAFT_VERSION || '1.21';
 const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
 const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
-const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 1000);
-const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 1500);
+const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 500);
+const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 800);
 const RECONNECT_DELAY_MS = Number(process.env.RECONNECT_DELAY_MS || 10000);
-const AUTH_WORLD_READY_WAIT_MS = 5000;
+const AUTH_WORLD_READY_WAIT_MS = 500;
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
     .split(',')
