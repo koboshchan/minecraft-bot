@@ -325,6 +325,57 @@ function createCraftCommandController(options) {
     }
   }
 
+  // Move output items to offhand and toss them, preserving ingredient inventory.
+  async function tossViaOffhand(bot, itemType, state) {
+    const OFFHAND_SLOT = 45; // Mineflayer offhand slot
+
+    while (state.enabled) {
+      const stack = bot.inventory.items().find((it) => it.type === itemType);
+      if (!stack) break;
+
+      // Move item to offhand
+      try {
+        await bot.inventory.move(stack.slot, OFFHAND_SLOT);
+        await sleepJitter(50, 20);
+      } catch (err) {
+        debugLog(`craft move to offhand failed ${bot.username}: ${err.message}`);
+        break;
+      }
+
+      // Toss from offhand
+      const beforeToss = inventorySignature(bot);
+      try {
+        const result = await tossStackAsync(bot, stack, beforeToss);
+        if (!result.changed) {
+          // Item didn't toss, stop trying
+          break;
+        }
+      } catch (err) {
+        debugLog(`craft offhand toss failed ${bot.username}: ${err.message}`);
+        break;
+      }
+
+      await sleepJitter(60, 30);
+    }
+  }
+
+  // Toss non-ingredient items via offhand to keep inventory clean.
+  async function tossGarbageViaOffhand(bot, recipe, state) {
+    const ingredientIds = getRecipeIngredientIds(recipe);
+
+    while (state.enabled) {
+      const garbageStack = bot.inventory.items().find((it) => !ingredientIds.has(it.type));
+      if (!garbageStack) break;
+
+      try {
+        await tossViaOffhand(bot, garbageStack.type, state);
+      } catch (err) {
+        debugLog(`craft toss garbage failed ${bot.username}: ${err.message}`);
+        break;
+      }
+    }
+  }
+
   async function runCraftPass(bot, state) {
     if (!state.enabled || state.running) return;
     if (!bot.entity || !bot.inventory) return;
@@ -385,9 +436,6 @@ function createCraftCommandController(options) {
         requiresTable: recipe.requiresTable
       });
 
-      // Toss any inventory items that are not ingredients for this recipe.
-      await tossNonIngredients(bot, recipe, state);
-
       const resultCount = Math.max(1, Number(recipe.result?.count) || 1);
       const craftsFor64 = Math.ceil(64 / resultCount);
       const maxCrafts = maxCraftableCount(bot, recipe);
@@ -419,9 +467,9 @@ function createCraftCommandController(options) {
 
         if (!inventoryLikelyFull) throw error;
 
-        // Inventory full mid-craft: drain output and retry the whole batch once.
+        // Inventory full mid-craft: drain output via offhand and retry the whole batch once.
         debugLog(`craft pass ${bot.username}: inventory tight, draining then retrying`);
-        await tossAllOfType(bot, recipe.result.id, state);
+        await tossViaOffhand(bot, recipe.result.id, state);
         await sleepJitter(130, 60);
 
         if (bot.currentWindow) {
@@ -432,10 +480,13 @@ function createCraftCommandController(options) {
         await bot.craft(recipe, craftCount, craftingTable);
       }
 
-      // Small pause before tossing crafted output.
+      // Move crafted output to offhand and toss.
       await sleepJitter(100, 40);
 
-      await tossAllOfType(bot, recipe.result.id, state);
+      await tossViaOffhand(bot, recipe.result.id, state);
+
+      // Toss any garbage items that accumulated.
+      await tossGarbageViaOffhand(bot, recipe, state);
 
       debugLog(`craft pass ${bot.username}: done`);
     } catch (error) {
@@ -458,10 +509,10 @@ function createCraftCommandController(options) {
     });
   }
 
-  // Schedule the next craft pass with a randomised delay (1200ms ± 400ms).
+  // Schedule the next craft pass with a randomised delay (5-15 ticks / 250-750ms).
   function scheduleNext(bot, state) {
     if (!state.enabled) return;
-    const delay = 1200 + Math.floor((Math.random() * 2 - 1) * 400);
+    const delay = 500 + Math.floor((Math.random() * 2 - 1) * 250);
     state.timeout = setTimeout(() => {
       scheduleCraftPass(bot, state);
       scheduleNext(bot, state);
