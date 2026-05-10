@@ -4,6 +4,8 @@ function createCraftCommandController(options) {
   const TICKS_PER_SECOND = 20;
   const RECIPE_CACHE_TTL_TICKS = 200;
   const RECIPE_CACHE_TTL_MS = (RECIPE_CACHE_TTL_TICKS / TICKS_PER_SECOND) * 1000;
+  const TABLE_SEARCH_MAX_DISTANCE = 24;
+  const TABLE_SEARCH_NEAR_FRAME_RADIUS = 6;
   const ENABLE_GARBAGE_TOSS = false;
   const ENABLE_DIRECT_GUI_DROP_DURING_CRAFT = true;
 
@@ -154,11 +156,36 @@ function createCraftCommandController(options) {
     });
   }
 
-  function findCraftingTable(bot, maxDistance = 6) {
+  function findCraftingTable(bot, maxDistance = TABLE_SEARCH_MAX_DISTANCE) {
     const registry = getRegistryFromBot(bot);
     const tableBlock = registry?.blocksByName?.crafting_table;
     if (!tableBlock) return null;
-    return bot.findBlock({ matching: tableBlock.id, maxDistance });
+
+    // Fast path: nearest table around the bot.
+    const direct = bot.findBlock({ matching: tableBlock.id, maxDistance });
+    if (direct) {
+      return direct;
+    }
+
+    // Fallback: when bot spawns slightly away from the crafting area, probe
+    // around nearby item frames that usually mark the crafting station.
+    if (!bot.entity || !bot.entity.position) {
+      return null;
+    }
+
+    const nearbyFrames = getItemFramesNearPosition(bot, bot.entity.position, Math.min(maxDistance, 12));
+    for (const frame of nearbyFrames) {
+      const tableNearFrame = bot.findBlock({
+        matching: tableBlock.id,
+        maxDistance: TABLE_SEARCH_NEAR_FRAME_RADIUS,
+        point: frame.entity.position
+      });
+      if (tableNearFrame) {
+        return tableNearFrame;
+      }
+    }
+
+    return null;
   }
 
   function scanFrameCandidates(node, candidates, seen) {
