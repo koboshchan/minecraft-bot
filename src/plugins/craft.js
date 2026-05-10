@@ -79,6 +79,31 @@ function injectCraftPlugin(bot) {
     closeCraftingWindow();
   }
 
+  async function craftStackDrop(recipe, count, craftingTable) {
+    assert.ok(recipe);
+    count = parseInt(count ?? 1, 10);
+    if (recipe.requiresTable && !craftingTable) {
+      throw new Error(`Recipe requires craftingTable, but one was not supplied: ${JSON.stringify(recipe)}`);
+    }
+
+    try {
+      let remaining = count;
+      while (remaining > 0) {
+        const batchCount = Math.min(remaining, getMaxBatchCount(recipe));
+        if (batchCount <= 0) {
+          throw new Error('invalid craft stack batch size');
+        }
+        await craftStackDropOnce(recipe, batchCount, craftingTable);
+        remaining -= batchCount;
+      }
+    } catch (err) {
+      closeCraftingWindow();
+      throw new Error(err);
+    }
+
+    closeCraftingWindow();
+  }
+
   async function craftOnce(recipe, craftingTable) {
     const window = await getCraftWindow(craftingTable);
     await startClicking(window, craftingTable ? 3 : 2, craftingTable ? 3 : 2);
@@ -294,8 +319,15 @@ function injectCraftPlugin(bot) {
           if (heldCount <= 0) throw new Error('missing ingredient');
 
           const placements = Math.min(remaining, heldCount);
-          for (let placement = 0; placement < placements; placement += 1) {
-            await bot.clickWindow(destinationSlot, 1, 0);
+          if (placements === heldCount) {
+            await bot.clickWindow(destinationSlot, 0, 0);
+          } else if (Math.floor(heldCount / 2) === placements) {
+            await bot.clickWindow(destinationSlot, 0, 0); // left click places all
+            await bot.clickWindow(destinationSlot, 1, 0); // right click picks up half
+          } else {
+            for (let placement = 0; placement < placements; placement += 1) {
+              await bot.clickWindow(destinationSlot, 1, 0);
+            }
           }
 
           remaining -= placements;
@@ -334,6 +366,157 @@ function injectCraftPlugin(bot) {
         const item = new Item(recipe.result.id, recipe.result.count, recipe.result.metadata);
         window.updateSlot(0, item);
         await bot.clickWindow(0, 0, 1);
+      }
+
+      function slot(x, y) {
+        return 1 + x + width * y;
+      }
+
+      function unusedRecipeSlots() {
+        const result = [];
+        let x;
+        let y;
+        let row;
+        if (recipe.inShape) {
+          for (y = 0; y < recipe.inShape.length; y += 1) {
+            row = recipe.inShape[y];
+            for (x = 0; x < row.length; x += 1) {
+              if (row[x].id === -1) result.push(slot(x, y));
+            }
+            for (; x < width; x += 1) {
+              result.push(slot(x, y));
+            }
+          }
+          for (; y < height; y += 1) {
+            for (x = 0; x < width; x += 1) {
+              result.push(slot(x, y));
+            }
+          }
+        } else {
+          for (y = 0; y < height; y += 1) {
+            for (x = 0; x < width; x += 1) {
+              result.push(slot(x, y));
+            }
+          }
+        }
+        return result;
+      }
+    }
+  }
+
+  async function craftStackDropOnce(recipe, count, craftingTable) {
+    const window = await getCraftWindow(craftingTable);
+    await startClicking(window, craftingTable ? 3 : 2, craftingTable ? 3 : 2);
+
+    async function startClicking(window, width, height) {
+      const extraSlots = unusedRecipeSlots();
+      let ingredientIndex = 0;
+      let originalSourceSlot = null;
+      let iterator;
+
+      if (recipe.inShape) {
+        iterator = {
+          x: 0,
+          y: 0,
+          row: recipe.inShape[0]
+        };
+        await clickShape();
+      } else {
+        await nextIngredientsClick();
+      }
+
+      function incrementShapeIterator() {
+        iterator.x += 1;
+        if (iterator.x >= iterator.row.length) {
+          iterator.y += 1;
+          if (iterator.y >= recipe.inShape.length) return null;
+          iterator.x = 0;
+          iterator.row = recipe.inShape[iterator.y];
+        }
+        return iterator;
+      }
+
+      async function nextShapeClick() {
+        if (incrementShapeIterator()) {
+          await clickShape();
+        } else if (!recipe.ingredients) {
+          await putMaterialsAway();
+        } else {
+          await nextIngredientsClick();
+        }
+      }
+
+      async function ensureSelectedIngredient(ingredient) {
+        if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
+          (ingredient.metadata != null && window.selectedItem.metadata !== ingredient.metadata)) {
+          const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata);
+          if (!sourceItem) throw new Error('missing ingredient');
+          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot;
+          await bot.clickWindow(sourceItem.slot, 0, 0);
+        }
+      }
+
+      async function placeIngredientCount(destinationSlot, ingredient) {
+        const perCraftCount = ingredient.count ?? 1;
+        let remaining = count * perCraftCount;
+        while (remaining > 0) {
+          await ensureSelectedIngredient(ingredient);
+          const heldCount = window.selectedItem?.count || 0;
+          if (heldCount <= 0) throw new Error('missing ingredient');
+
+          const placements = Math.min(remaining, heldCount);
+          if (placements === heldCount) {
+            await bot.clickWindow(destinationSlot, 0, 0);
+          } else if (Math.floor(heldCount / 2) === placements) {
+            await bot.clickWindow(destinationSlot, 0, 0); // left click places all
+            await bot.clickWindow(destinationSlot, 1, 0); // right click picks up half
+          } else {
+            for (let placement = 0; placement < placements; placement += 1) {
+              await bot.clickWindow(destinationSlot, 1, 0);
+            }
+          }
+
+          remaining -= placements;
+        }
+      }
+
+      async function clickShape() {
+        const destinationSlot = slot(iterator.x, iterator.y);
+        const ingredient = iterator.row[iterator.x];
+        if (ingredient.id === -1) return nextShapeClick();
+        await placeIngredientCount(destinationSlot, ingredient);
+        await nextShapeClick();
+      }
+
+      async function nextIngredientsClick() {
+        const ingredient = recipe.ingredients[ingredientIndex];
+        const destinationSlot = extraSlots.pop();
+        await placeIngredientCount(destinationSlot, ingredient);
+        ingredientIndex += 1;
+        if (ingredientIndex < recipe.ingredients.length) {
+          await nextIngredientsClick();
+        } else {
+          await putMaterialsAway();
+        }
+      }
+
+      async function putMaterialsAway() {
+        const start = window.inventoryStart;
+        const end = window.inventoryEnd;
+        await bot.putSelectedItemRange(start, end, window, originalSourceSlot);
+        await dropResultToGround();
+      }
+
+      async function dropResultToGround() {
+        assert.strictEqual(window.selectedItem, null);
+        const predicted = new Item(recipe.result.id, recipe.result.count, recipe.result.metadata);
+
+        if (!window.slots[0]) {
+          window.updateSlot(0, predicted);
+        }
+
+        // Drop the entire crafted batch instantly
+        await bot.clickWindow(0, 1, 4);
       }
 
       function slot(x, y) {
@@ -417,6 +600,9 @@ function injectCraftPlugin(bot) {
       maxBatchCount = Math.min(maxBatchCount, Math.floor(stackLimit / perCraftCount));
     }
 
+    const resultCount = recipe.result?.count ?? 1;
+    maxBatchCount = Math.min(maxBatchCount, Math.floor(32 / resultCount));
+
     return Number.isFinite(maxBatchCount) && maxBatchCount > 0 ? maxBatchCount : 1;
   }
 
@@ -443,6 +629,7 @@ function injectCraftPlugin(bot) {
 
   bot.craft = craft;
   bot.craftStack = craftStack;
+  bot.craftStackDrop = craftStackDrop;
   bot.craftStackBatchSize = getMaxBatchCount;
   bot.recipesFor = recipesFor;
   bot.recipesAll = recipesAll;

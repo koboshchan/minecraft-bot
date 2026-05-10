@@ -11,49 +11,8 @@ function createCraftCommandController(options) {
     return parts[parts.length - 1];
   }
 
-  function lookAtJitter(bot, basePos) {
-    bot.lookAt(basePos, true).catch(() => {});
-  }
-
-  function inventorySignature(bot) {
-    return bot.inventory.items()
-      .map((item) => `${item.slot}:${item.type}:${item.count}`)
-      .sort()
-      .join('|');
-  }
-
-  function tossStackAsync(bot, item, beforeSignature) {
-    return new Promise((resolve, reject) => {
-      let finished = false;
-
-      const end = (result) => {
-        if (finished) return;
-        finished = true;
-        clearInterval(poll);
-        clearTimeout(timeout);
-        resolve(result);
-      };
-
-      bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
-        if (error) {
-          if (finished) return;
-          finished = true;
-          clearInterval(poll);
-          clearTimeout(timeout);
-          reject(error);
-          return;
-        }
-        end({ changed: inventorySignature(bot) !== beforeSignature, source: 'callback' });
-      });
-
-      const poll = setInterval(() => {
-        if (inventorySignature(bot) !== beforeSignature) {
-          end({ changed: true, source: 'inventory-change' });
-        }
-      }, 25);
-
-      const timeout = setTimeout(() => end({ changed: false, source: 'timeout' }), 350);
-    });
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function getRegistryFromBot(bot) {
@@ -217,17 +176,13 @@ function createCraftCommandController(options) {
     return null;
   }
 
-  function getRecipeRequirementCounts(recipe) {
-    const required = new Map();
-
-    if (Array.isArray(recipe.delta) && recipe.delta.length > 0) {
-      for (const delta of recipe.delta) {
-        if (!delta || delta.id == null || delta.id === -1 || delta.count >= 0) continue;
-        required.set(delta.id, (required.get(delta.id) || 0) + Math.abs(delta.count));
-      }
-      return required;
+  function maxCraftableCount(bot, recipe) {
+    const counts = new Map();
+    for (const item of bot.inventory.items()) {
+      counts.set(item.type, (counts.get(item.type) || 0) + item.count);
     }
 
+    const required = new Map();
     const ingredients = [];
     if (recipe.inShape) {
       for (const row of recipe.inShape) {
@@ -244,89 +199,29 @@ function createCraftCommandController(options) {
       required.set(ing.id, (required.get(ing.id) || 0) + 1);
     }
 
-    return required;
-  }
-
-  function maxCraftableCount(bot, recipe) {
-    const required = getRecipeRequirementCounts(recipe);
     if (required.size === 0) return 0;
 
     let max = Infinity;
     for (const [id, needed] of required) {
-      const have = bot.inventory.count(id, null);
+      const have = counts.get(id) || 0;
       max = Math.min(max, Math.floor(have / needed));
     }
 
     return max === Infinity ? 0 : max;
   }
 
-  function getRecipeIngredientIds(recipe) {
-    return new Set(getRecipeRequirementCounts(recipe).keys());
-  }
-
-  async function tossItemType(bot, itemType, state) {
-    let stagnant = 0;
-
-    while (state.enabled) {
-      const stack = bot.inventory.items().find((it) => it.type === itemType);
-      if (!stack) break;
-
-      const beforeToss = inventorySignature(bot);
-      let tossResult;
-      try {
-        tossResult = await tossStackAsync(bot, stack, beforeToss);
-      } catch (err) {
-        debugLog(`craft toss failed ${bot.username}: ${err.message}`);
-        break;
-      }
-
-      if (!tossResult.changed) {
-        stagnant += 1;
-        if (stagnant >= 2) break;
-      } else {
-        stagnant = 0;
-      }
-
-    }
-  }
-
-  // Toss output items from inventory.
-  async function tossViaOffhand(bot, itemType, state) {
-    await tossItemType(bot, itemType, state);
-  }
-
-  // Toss non-ingredient items to keep inventory clean.
-  async function tossGarbageViaOffhand(bot, recipe, state) {
-    const ingredientIds = getRecipeIngredientIds(recipe);
-    const garbageTypes = [...new Set(
-      bot.inventory.items()
-        .filter((it) => !ingredientIds.has(it.type))
-        .map((it) => it.type)
-    )];
-
-    for (const itemType of garbageTypes) {
-      if (!state.enabled) break;
-      await tossViaOffhand(bot, itemType, state);
-    }
-  }
-
   async function runCraftPass(bot, state) {
     if (!state.enabled || state.running) return;
     if (!bot.entity || !bot.inventory) return;
-    if (Date.now() < (state.noCraftingTableUntil || 0)) return;
-    if (Date.now() < (state.noIngredientsUntil || 0)) return;
 
     state.running = true;
 
     try {
       const craftingTable = findCraftingTable(bot);
       if (!craftingTable) {
-        state.noCraftingTableUntil = Date.now() + 5000;
         debugLog(`craft pass ${bot.username}: no crafting table found within range`);
         return;
       }
-
-      state.noCraftingTableUntil = 0;
 
       debugLog(`craft pass ${bot.username}: crafting table at ${craftingTable.position}`);
 
@@ -349,82 +244,45 @@ function createCraftCommandController(options) {
       );
 
       // Always face the item frame first; craft and toss without changing look direction.
-      lookAtJitter(bot, targetFrame.entity.position.offset(0, 0.5, 0));
+      await bot.lookAt(targetFrame.entity.position.offset(0, 0.5, 0), true).catch(() => {});
 
-      // Use cached recipe to avoid re-querying every pass. Clear cache when target changes.
-      if (state.cachedRecipeItemId !== targetItemId) {
-        state.cachedRecipe = null;
-        state.cachedRecipeItemId = null;
+      const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
+      if (recipes.length === 0) {
+        debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
+        return;
       }
 
-      if (!state.cachedRecipe) {
-        const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
-        if (recipes.length === 0) {
-          state.noIngredientsUntil = Date.now() + 1000;
-          debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
-          return;
-        }
-        state.cachedRecipe = recipes[0];
-        state.cachedRecipeItemId = targetItemId;
-        debugLog(`craft pass ${bot.username}: recipe cached for item ${targetItemId}`);
-      }
-
-      const recipe = state.cachedRecipe;
+      const recipe = recipes[0];
       debugLog(`craft pass ${bot.username}: crafting with recipe`, {
         result: recipe.result,
         requiresTable: recipe.requiresTable
       });
 
-      const maxCrafts = maxCraftableCount(bot, recipe);
-
-      if (maxCrafts <= 0) {
-        state.noIngredientsUntil = Date.now() + 1000; // 20 ticks backoff when missing ingredients
-        const requirements = [...getRecipeRequirementCounts(recipe).entries()]
-          .map(([id, needed]) => `${id}x${needed}`)
-          .join(', ');
-        debugLog(`craft pass ${bot.username}: no ingredients available to craft`, {
-          requirements,
-          inventoryItems: bot.inventory.items().map((item) => `${item.type}x${item.count}`)
-        });
+      const stackSize = Math.floor(64 / (recipe.result.count || 1));
+      const maxPerPass = 32;
+      const craftCount = Math.min(stackSize, maxPerPass, maxCraftableCount(bot, recipe));
+      if (craftCount <= 0) {
+        debugLog(`craft pass ${bot.username}: not enough ingredients`);
         return;
       }
-
-      const batchSize = typeof bot.craftStackBatchSize === 'function' ? bot.craftStackBatchSize(recipe) : maxCrafts;
-      const craftCount = Math.min(maxCrafts, batchSize);
 
       // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
         bot.closeWindow(bot.currentWindow);
       }
 
-      debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (crafting all available)`);
+      debugLog(`craft pass ${bot.username}: craftCount=${craftCount}`);
 
-      const craftMethod = typeof bot.craftStack === 'function' ? bot.craftStack.bind(bot) : bot.craft.bind(bot);
+      const directDropCraftMethod = typeof bot.craftStackDrop === 'function'
+        ? bot.craftStackDrop.bind(bot)
+        : null;
 
-      // Craft all available — equivalent to shift-clicking the result slot.
-      try {
-        await craftMethod(recipe, craftCount, craftingTable);
-      } catch (error) {
-        const message = String(error?.message || '').toLowerCase();
-        const inventoryLikelyFull =
-          message.includes('inventory') || message.includes('full') || message.includes('space');
-
-        if (!inventoryLikelyFull) throw error;
-        // Inventory full mid-craft: drain output and retry the whole batch once.
-        debugLog(`craft pass ${bot.username}: inventory tight, draining then retrying`);
-        await tossViaOffhand(bot, recipe.result.id, state);
-
-        if (bot.currentWindow) {
-          bot.closeWindow(bot.currentWindow);
-        }
-
-        await craftMethod(recipe, craftCount, craftingTable);
+      if (!directDropCraftMethod) {
+        throw new Error('craftStackDrop not available');
       }
 
-      await tossViaOffhand(bot, recipe.result.id, state);
-
-      // Toss any garbage items that accumulated.
-      await tossGarbageViaOffhand(bot, recipe, state);
+      await directDropCraftMethod(recipe, craftCount, craftingTable);
+      debugLog(`craft pass ${bot.username}: dropped output directly from crafting window`);
 
       debugLog(`craft pass ${bot.username}: done`);
     } catch (error) {
@@ -433,7 +291,7 @@ function createCraftCommandController(options) {
       try {
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
       } catch (_) {}
-      state.noIngredientsUntil = Date.now() + 1000;
+      await sleep(150);
     } finally {
       state.running = false;
     }
@@ -447,16 +305,6 @@ function createCraftCommandController(options) {
     });
   }
 
-  // Schedule the next craft pass every game tick (~50ms).
-  function scheduleNext(bot, state) {
-    if (!state.enabled) return;
-    const delay = 50;
-    state.timeout = setTimeout(() => {
-      scheduleCraftPass(bot, state);
-      scheduleNext(bot, state);
-    }, delay);
-  }
-
   function enableCrafter(botName) {
     if (craftStates.has(botName)) {
       return { ok: false, message: `Crafter already enabled for ${botName}` };
@@ -467,17 +315,10 @@ function createCraftCommandController(options) {
       return { ok: false, message: `Bot ${botName} not found` };
     }
 
-    const state = {
-      enabled: true,
-      running: false,
-      bot,
-      cachedRecipe: null,
-      cachedRecipeItemId: null,
-      noCraftingTableUntil: 0,
-      noIngredientsUntil: 0
-    };
+    const state = { enabled: true, running: false, bot };
 
-    scheduleNext(bot, state);
+    const interval = setInterval(() => scheduleCraftPass(bot, state), 150);
+    state.interval = interval;
 
     craftStates.set(botName, state);
     debugLog(`craft enabled for ${botName}`);
@@ -492,7 +333,7 @@ function createCraftCommandController(options) {
     }
 
     state.enabled = false;
-    if (state.timeout) clearTimeout(state.timeout);
+    if (state.interval) clearInterval(state.interval);
     craftStates.delete(botName);
     debugLog(`craft disabled for ${botName}`);
     return true;
