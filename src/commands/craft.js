@@ -408,6 +408,65 @@ function createCraftCommandController(options) {
     await tossItemType(bot, outputId, state);
   }
 
+  function clickWindowAsync(bot, slot, mouseButton, mode) {
+    return new Promise((resolve, reject) => {
+      try {
+        bot.clickWindow(slot, mouseButton, mode, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  // Attempts to drop crafted output directly from crafting result slot.
+  // Uses mode=4, mouseButton=1 (Ctrl+Q) to drop full stack from the slot.
+  async function dropCraftResultFromGui(bot, state) {
+    const window = bot.currentWindow;
+    if (!window || !Array.isArray(window.slots) || window.slots.length === 0) {
+      return false;
+    }
+
+    const resultSlot = 0;
+    let droppedAny = false;
+    let stagnant = 0;
+
+    while (state.enabled) {
+      const resultItem = window.slots[resultSlot];
+      if (!resultItem) {
+        break;
+      }
+
+      const beforeSignature = inventorySignature(bot);
+
+      try {
+        await clickWindowAsync(bot, resultSlot, 1, 4);
+      } catch (error) {
+        debugLog(`craft gui-drop failed ${bot.username}: ${error.message}`);
+        break;
+      }
+
+      droppedAny = true;
+      await sleepJitter(70, 25);
+
+      if (inventorySignature(bot) === beforeSignature && window.slots[resultSlot]) {
+        stagnant += 1;
+        if (stagnant >= 2) {
+          break;
+        }
+      } else {
+        stagnant = 0;
+      }
+    }
+
+    return droppedAny;
+  }
+
   async function tossGarbage(bot, recipe, state) {
     const ingredientInfo = recipeIngredientIds(recipe);
     if (!ingredientInfo.confident) {
@@ -537,7 +596,10 @@ function createCraftCommandController(options) {
         if (!inventoryLikelyFull) throw error;
 
         debugLog(`craft pass ${bot.username}: inventory full, draining and retrying once`);
-        await tossOutput(bot, recipe, state);
+        const droppedFromGui = await dropCraftResultFromGui(bot, state);
+        if (!droppedFromGui) {
+          await tossOutput(bot, recipe, state);
+        }
         await sleepJitter(150, 60);
 
         if (!state.enabled) return;
@@ -556,7 +618,10 @@ function createCraftCommandController(options) {
       if (!state.enabled) return;
 
       await sleepJitter(110, 40);
-      await tossOutput(bot, recipe, state);
+      const droppedFromGui = await dropCraftResultFromGui(bot, state);
+      if (!droppedFromGui) {
+        await tossOutput(bot, recipe, state);
+      }
       if (ENABLE_GARBAGE_TOSS) {
         await tossGarbage(bot, recipe, state);
       }
