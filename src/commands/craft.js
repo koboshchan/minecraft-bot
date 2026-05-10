@@ -173,12 +173,20 @@ function createCraftCommandController(options) {
       return null;
     }
 
-    const nearbyFrames = getItemFramesNearPosition(bot, bot.entity.position, Math.min(maxDistance, 12));
-    for (const frame of nearbyFrames) {
+    const frameAnchors = Object.values(bot.entities)
+      .filter((entity) => entity && entity.position && isItemFrameEntity(bot, entity))
+      .sort((a, b) => {
+        const da = bot.entity.position.distanceTo(a.position);
+        const db = bot.entity.position.distanceTo(b.position);
+        return da - db;
+      })
+      .slice(0, 48);
+
+    for (const frame of frameAnchors) {
       const tableNearFrame = bot.findBlock({
         matching: tableBlock.id,
         maxDistance: TABLE_SEARCH_NEAR_FRAME_RADIUS,
-        point: frame.entity.position
+        point: frame.position
       });
       if (tableNearFrame) {
         return tableNearFrame;
@@ -495,7 +503,51 @@ function createCraftCommandController(options) {
     return droppedAny;
   }
 
+  function waitForWindowOpen(bot, timeoutMs = 4000) {
+    return new Promise((resolve, reject) => {
+      const onWindowOpen = (window) => {
+        cleanup();
+        resolve(window);
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('windowOpen timeout'));
+      }, timeoutMs);
+
+      function cleanup() {
+        clearTimeout(timer);
+        bot.removeListener('windowOpen', onWindowOpen);
+      }
+
+      bot.on('windowOpen', onWindowOpen);
+    });
+  }
+
+  // Copied from mineflayer craft flow: activate table, wait for windowOpen,
+  // then ensure the opened window is a crafting window.
+  async function openCraftingTableWindow(bot, craftingTable) {
+    if (!craftingTable) {
+      return bot.inventory;
+    }
+
+    const current = bot.currentWindow;
+    if (current && typeof current.type === 'string' && current.type.startsWith('minecraft:crafting')) {
+      return current;
+    }
+
+    bot.activateBlock(craftingTable);
+    const window = await waitForWindowOpen(bot);
+    if (!window || typeof window.type !== 'string' || !window.type.startsWith('minecraft:crafting')) {
+      throw new Error(`crafting: non craftingTable used as craftingTable: ${window?.type || 'unknown'}`);
+    }
+
+    return window;
+  }
+
   async function craftBatch(bot, recipe, craftCount, craftingTable) {
+    await openCraftingTableWindow(bot, craftingTable);
+
     if (!ENABLE_DIRECT_GUI_DROP_DURING_CRAFT) {
       await bot.craft(recipe, craftCount, craftingTable);
       return;
