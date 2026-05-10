@@ -53,7 +53,19 @@ function createCraftCommandController(options) {
   function getEntityTypeName(bot, entity) {
     const registry = getRegistryFromBot(bot);
     const typeId = Number(entity?.type);
-    const fromRegistry = registry?.entities?.find((entry) => entry && entry.id === typeId);
+    let fromRegistry = null;
+
+    if (Array.isArray(registry?.entities)) {
+      fromRegistry = registry.entities.find((entry) => entry && entry.id === typeId) || null;
+    } else if (registry?.entities && typeof registry.entities === 'object') {
+      for (const entry of Object.values(registry.entities)) {
+        if (entry && entry.id === typeId) {
+          fromRegistry = entry;
+          break;
+        }
+      }
+    }
+
     if (fromRegistry && fromRegistry.name) {
       return String(fromRegistry.name).toLowerCase();
     }
