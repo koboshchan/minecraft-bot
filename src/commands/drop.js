@@ -8,14 +8,18 @@ function createDropCommandController(options) {
 
   function tossStackAsync(bot, item) {
     return new Promise((resolve, reject) => {
-      bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+      try {
+        bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
 
-        resolve();
-      });
+          resolve();
+        });
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 

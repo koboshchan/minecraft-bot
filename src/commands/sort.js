@@ -47,22 +47,34 @@ function createSortCommandController(options) {
       };
 
       // Keep tosses serialized: concurrent toss() calls can corrupt mineflayer transfer state.
-      bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
-        if (error) {
-          if (finished) {
+      // Mineflayer can also throw synchronously before callback on stale stacks.
+      try {
+        bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
+          if (error) {
+            if (finished) {
+              return;
+            }
+
+            finished = true;
+            clearInterval(poll);
+            clearTimeout(timeout);
+            reject(error);
             return;
           }
 
-          finished = true;
-          clearInterval(poll);
-          clearTimeout(timeout);
-          reject(error);
+          const current = inventorySignature(bot);
+          end({ changed: current !== beforeSignature, source: 'callback' });
+        });
+      } catch (error) {
+        if (finished) {
           return;
         }
 
-        const current = inventorySignature(bot);
-        end({ changed: current !== beforeSignature, source: 'callback' });
-      });
+        finished = true;
+        clearInterval(poll);
+        clearTimeout(timeout);
+        reject(error);
+      }
 
       const poll = setInterval(() => {
         const current = inventorySignature(bot);

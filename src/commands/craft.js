@@ -116,18 +116,26 @@ function createCraftCommandController(options) {
         resolve(result);
       };
 
-      bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
-        if (error) {
-          if (done) return;
-          done = true;
-          clearInterval(poll);
-          clearTimeout(timeout);
-          reject(error);
-          return;
-        }
+      try {
+        bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
+          if (error) {
+            if (done) return;
+            done = true;
+            clearInterval(poll);
+            clearTimeout(timeout);
+            reject(error);
+            return;
+          }
 
-        finish({ changed: inventorySignature(bot) !== beforeSignature, source: 'callback' });
-      });
+          finish({ changed: inventorySignature(bot) !== beforeSignature, source: 'callback' });
+        });
+      } catch (error) {
+        if (done) return;
+        done = true;
+        clearInterval(poll);
+        clearTimeout(timeout);
+        reject(error);
+      }
 
       const poll = setInterval(() => {
         if (inventorySignature(bot) !== beforeSignature) {
@@ -266,48 +274,83 @@ function createCraftCommandController(options) {
     return frames;
   }
 
-  function getIngredientCount(ingredient) {
-    if (!ingredient || typeof ingredient !== 'object') return 1;
-    if (Number.isFinite(ingredient.count) && ingredient.count > 0) return ingredient.count;
-    if (Number.isFinite(ingredient.itemCount) && ingredient.itemCount > 0) return ingredient.itemCount;
-    return 1;
+  function normalizeIngredientEntry(ingredient) {
+    if (!ingredient) return null;
+
+    if (Array.isArray(ingredient)) {
+      for (const option of ingredient) {
+        if (option && Number.isFinite(option.id) && option.id !== -1) {
+          return option;
+        }
+      }
+      return null;
+    }
+
+    if (typeof ingredient === 'object' && Number.isFinite(ingredient.id) && ingredient.id !== -1) {
+      return ingredient;
+    }
+
+    return null;
   }
 
-  function getRecipeRequirementCounts(recipe) {
+  function getRecipeAnalysis(recipe) {
     const required = new Map();
+    let confident = false;
 
     if (Array.isArray(recipe.delta) && recipe.delta.length > 0) {
       for (const delta of recipe.delta) {
         if (!delta || delta.id == null || delta.id === -1 || delta.count >= 0) continue;
         required.set(delta.id, (required.get(delta.id) || 0) + Math.abs(delta.count));
       }
-      return required;
+      return {
+        required,
+        confident: required.size > 0,
+        source: 'delta'
+      };
     }
 
     const ingredients = [];
+    let unresolved = false;
+
     if (Array.isArray(recipe.inShape)) {
       for (const row of recipe.inShape) {
         if (!Array.isArray(row)) continue;
         for (const ingredient of row) {
-          if (ingredient && ingredient.id !== -1) ingredients.push(ingredient);
+          const normalized = normalizeIngredientEntry(ingredient);
+          if (normalized) {
+            ingredients.push(normalized);
+          } else if (ingredient) {
+            unresolved = true;
+          }
         }
       }
     } else if (Array.isArray(recipe.ingredients)) {
       for (const ingredient of recipe.ingredients) {
-        if (ingredient && ingredient.id !== -1) ingredients.push(ingredient);
+        const normalized = normalizeIngredientEntry(ingredient);
+        if (normalized) {
+          ingredients.push(normalized);
+        } else if (ingredient) {
+          unresolved = true;
+        }
       }
     }
 
     for (const ingredient of ingredients) {
-      const units = getIngredientCount(ingredient);
-      required.set(ingredient.id, (required.get(ingredient.id) || 0) + units);
+      // Crafting grid entries are one unit per slot.
+      required.set(ingredient.id, (required.get(ingredient.id) || 0) + 1);
     }
 
-    return required;
+    confident = required.size > 0 && !unresolved;
+    return {
+      required,
+      confident,
+      source: 'shape-or-ingredients'
+    };
   }
 
   function maxCraftableCount(bot, recipe) {
-    const required = getRecipeRequirementCounts(recipe);
+    const analysis = getRecipeAnalysis(recipe);
+    const required = analysis.required;
     if (required.size === 0) return 0;
 
     let max = Infinity;
@@ -320,7 +363,12 @@ function createCraftCommandController(options) {
   }
 
   function recipeIngredientIds(recipe) {
-    return new Set(getRecipeRequirementCounts(recipe).keys());
+    const analysis = getRecipeAnalysis(recipe);
+    return {
+      ids: new Set(analysis.required.keys()),
+      confident: analysis.confident,
+      source: analysis.source
+    };
   }
 
   async function tossItemType(bot, itemType, state) {
@@ -357,7 +405,18 @@ function createCraftCommandController(options) {
   }
 
   async function tossGarbage(bot, recipe, state) {
-    const keep = recipeIngredientIds(recipe);
+    const ingredientInfo = recipeIngredientIds(recipe);
+    if (!ingredientInfo.confident) {
+      debugLog(`craft pass ${bot.username}: skip garbage toss (uncertain ingredient map source=${ingredientInfo.source})`);
+      return;
+    }
+
+    const keep = ingredientInfo.ids;
+    const outputId = recipe?.result?.id;
+    if (Number.isFinite(outputId)) {
+      keep.add(outputId);
+    }
+
     const garbageTypes = [...new Set(
       bot.inventory.items()
         .filter((item) => !keep.has(item.type))
