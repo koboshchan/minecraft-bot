@@ -4,6 +4,7 @@ function createCraftCommandController(options) {
   const TICKS_PER_SECOND = 20;
   const RECIPE_CACHE_TTL_TICKS = 200;
   const RECIPE_CACHE_TTL_MS = (RECIPE_CACHE_TTL_TICKS / TICKS_PER_SECOND) * 1000;
+  const ENABLE_GARBAGE_TOSS = false;
 
   function normalizeItemName(name) {
     if (!name) return '';
@@ -442,10 +443,24 @@ function createCraftCommandController(options) {
       }
       if (recipes.length === 0) continue;
 
+      let bestRecipe = null;
+      let bestCraftCount = -1;
+      for (const recipe of recipes) {
+        const craftCount = maxCraftableCount(bot, recipe);
+        if (craftCount > bestCraftCount) {
+          bestCraftCount = craftCount;
+          bestRecipe = recipe;
+        }
+      }
+
+      if (!bestRecipe) {
+        continue;
+      }
+
       return {
         frame,
         itemId: frame.itemId,
-        recipe: recipes[0]
+        recipe: bestRecipe
       };
     }
 
@@ -503,6 +518,8 @@ function createCraftCommandController(options) {
         return;
       }
 
+      debugLog(`craft pass ${bot.username}: craftCount=${initialCraftCount}`);
+
       if (bot.currentWindow) {
         bot.closeWindow(bot.currentWindow);
         await sleepJitter(220, 80);
@@ -540,7 +557,9 @@ function createCraftCommandController(options) {
 
       await sleepJitter(110, 40);
       await tossOutput(bot, recipe, state);
-      await tossGarbage(bot, recipe, state);
+      if (ENABLE_GARBAGE_TOSS) {
+        await tossGarbage(bot, recipe, state);
+      }
 
       debugLog(
         `craft pass ${bot.username}: done item=${target.itemId} frame=${target.frame.itemName || 'unknown'}`
