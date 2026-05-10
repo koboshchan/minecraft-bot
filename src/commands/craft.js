@@ -230,7 +230,11 @@ function createCraftCommandController(options) {
     for (const candidate of candidates) {
       if (candidate.type !== 'id') continue;
       const name = getItemNameFromId(bot, candidate.value);
-      if (!name) continue;
+      if (!name) {
+        // Keep id-only frames usable on servers with custom items that are not
+        // present in registry.items by name.
+        return { itemId: candidate.value, itemName: null };
+      }
       return { itemId: candidate.value, itemName: normalizeItemName(name) };
     }
 
@@ -370,7 +374,10 @@ function createCraftCommandController(options) {
     const frames = getItemFramesNearPosition(bot, craftingTable.position);
 
     for (const frame of frames) {
-      const recipes = bot.recipesFor(frame.itemId, null, 1, craftingTable);
+      let recipes = bot.recipesFor(frame.itemId, null, 1, craftingTable);
+      if ((!recipes || recipes.length === 0) && typeof bot.recipesAll === 'function') {
+        recipes = bot.recipesAll(frame.itemId, null, craftingTable);
+      }
       if (recipes.length === 0) continue;
 
       return {
@@ -378,6 +385,12 @@ function createCraftCommandController(options) {
         itemId: frame.itemId,
         recipe: recipes[0]
       };
+    }
+
+    if (frames.length > 0) {
+      debugLog(`craft target scan ${bot.username}: no recipes for nearby frames`,
+        frames.slice(0, 8).map((frame) => `${frame.itemName || 'id-only'}#${frame.itemId}`)
+      );
     }
 
     return null;
