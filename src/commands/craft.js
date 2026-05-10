@@ -4,8 +4,8 @@ function createCraftCommandController(options) {
   const TICKS_PER_SECOND = 20;
   const RECIPE_CACHE_TTL_TICKS = 200;
   const RECIPE_CACHE_TTL_MS = (RECIPE_CACHE_TTL_TICKS / TICKS_PER_SECOND) * 1000;
-  const TABLE_SEARCH_MAX_DISTANCE = 24;
-  const TABLE_SEARCH_NEAR_FRAME_RADIUS = 6;
+  const TABLE_SEARCH_MAX_DISTANCE = 48;
+  const TABLE_SEARCH_NEAR_FRAME_RADIUS = 12;
   const ENABLE_GARBAGE_TOSS = false;
   const ENABLE_DIRECT_GUI_DROP_DURING_CRAFT = true;
 
@@ -160,6 +160,35 @@ function createCraftCommandController(options) {
     const registry = getRegistryFromBot(bot);
     const tableBlock = registry?.blocksByName?.crafting_table;
     if (!tableBlock) return null;
+
+    // Deterministic close-range scan first (covers the common case where the
+    // table is directly in front of the bot but findBlock misses briefly).
+    if (bot.entity && bot.entity.position && bot.world) {
+      const base = bot.entity.position.floored();
+      let bestLocal = null;
+      let bestDistance = Infinity;
+
+      for (let dx = -3; dx <= 3; dx += 1) {
+        for (let dy = -2; dy <= 2; dy += 1) {
+          for (let dz = -3; dz <= 3; dz += 1) {
+            const pos = base.offset(dx, dy, dz);
+            const block = bot.blockAt(pos);
+            if (!block) continue;
+            if (block.name !== 'crafting_table') continue;
+
+            const distance = bot.entity.position.distanceTo(pos);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestLocal = block;
+            }
+          }
+        }
+      }
+
+      if (bestLocal) {
+        return bestLocal;
+      }
+    }
 
     // Fast path: nearest table around the bot.
     const direct = bot.findBlock({ matching: tableBlock.id, maxDistance });
@@ -655,9 +684,21 @@ function createCraftCommandController(options) {
     try {
       const craftingTable = findCraftingTable(bot);
       if (!craftingTable) {
+        state.noTablePasses = (state.noTablePasses || 0) + 1;
         debugLog(`craft pass ${bot.username}: no crafting table found`);
+        if (state.noTablePasses % 20 === 0) {
+          const frameCount = Object.values(bot.entities)
+            .filter((entity) => entity && entity.position && isItemFrameEntity(bot, entity))
+            .length;
+          debugLog(`craft table scan ${bot.username}: still missing after ${state.noTablePasses} passes`, {
+            frameCount,
+            position: bot.entity?.position
+          });
+        }
         return;
       }
+
+      state.noTablePasses = 0;
 
       const target = getCraftTarget(bot, craftingTable);
       if (!target) {
@@ -786,7 +827,8 @@ function createCraftCommandController(options) {
       timeout: null,
       cachedRecipeItemId: null,
       cachedRecipe: null,
-      cachedRecipeAtMs: 0
+      cachedRecipeAtMs: 0,
+      noTablePasses: 0
     };
 
     craftStates.set(botName, state);
