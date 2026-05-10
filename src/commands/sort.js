@@ -47,9 +47,9 @@ function createSortCommandController(options) {
       };
 
       // Keep tosses serialized: concurrent toss() calls can corrupt mineflayer transfer state.
-      // Mineflayer can also throw synchronously before callback on stale stacks.
+      // Use slot-based toss when possible to avoid type lookup races.
       try {
-        bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
+        const onTossDone = (error) => {
           if (error) {
             if (finished) {
               return;
@@ -64,7 +64,13 @@ function createSortCommandController(options) {
 
           const current = inventorySignature(bot);
           end({ changed: current !== beforeSignature, source: 'callback' });
-        });
+        };
+
+        if (typeof bot.tossStack === 'function') {
+          bot.tossStack(item, onTossDone);
+        } else {
+          bot.toss(item.type, item.metadata ?? null, item.count, onTossDone);
+        }
       } catch (error) {
         if (finished) {
           return;
