@@ -5,6 +5,7 @@ function createCraftCommandController(options) {
   const RECIPE_CACHE_TTL_TICKS = 200;
   const RECIPE_CACHE_TTL_MS = (RECIPE_CACHE_TTL_TICKS / TICKS_PER_SECOND) * 1000;
   const ENABLE_GARBAGE_TOSS = false;
+  const ENABLE_DIRECT_GUI_DROP_DURING_CRAFT = true;
 
   function normalizeItemName(name) {
     if (!name) return '';
@@ -467,6 +468,41 @@ function createCraftCommandController(options) {
     return droppedAny;
   }
 
+  async function craftBatch(bot, recipe, craftCount, craftingTable) {
+    if (!ENABLE_DIRECT_GUI_DROP_DURING_CRAFT) {
+      await bot.craft(recipe, craftCount, craftingTable);
+      return;
+    }
+
+    if (typeof bot.putAway !== 'function') {
+      await bot.craft(recipe, craftCount, craftingTable);
+      return;
+    }
+
+    const originalPutAway = bot.putAway.bind(bot);
+
+    // mineflayer crafting calls putAway(0) for result pickup each craft iteration.
+    // Override that call to drop from result slot directly instead of storing in inventory.
+    bot.putAway = async (slot) => {
+      if (slot !== 0) {
+        return originalPutAway(slot);
+      }
+
+      try {
+        await clickWindowAsync(bot, 0, 1, 4);
+      } catch (error) {
+        debugLog(`craft direct gui drop fallback ${bot.username}: ${error.message}`);
+        await originalPutAway(slot);
+      }
+    };
+
+    try {
+      await bot.craft(recipe, craftCount, craftingTable);
+    } finally {
+      bot.putAway = originalPutAway;
+    }
+  }
+
   async function tossGarbage(bot, recipe, state) {
     const ingredientInfo = recipeIngredientIds(recipe);
     if (!ingredientInfo.confident) {
@@ -587,7 +623,7 @@ function createCraftCommandController(options) {
       if (!state.enabled) return;
 
       try {
-        await bot.craft(recipe, initialCraftCount, craftingTable);
+        await craftBatch(bot, recipe, initialCraftCount, craftingTable);
       } catch (error) {
         const message = String(error?.message || '').toLowerCase();
         const inventoryLikelyFull =
@@ -611,7 +647,7 @@ function createCraftCommandController(options) {
 
         const retryCraftCount = maxCraftableCount(bot, recipe);
         if (retryCraftCount > 0) {
-          await bot.craft(recipe, retryCraftCount, craftingTable);
+          await craftBatch(bot, recipe, retryCraftCount, craftingTable);
         }
       }
 
