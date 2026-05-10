@@ -543,6 +543,9 @@ function createSortCommandController(options) {
       return false;
     }
 
+    await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
+    await sleepJitter(120, 40);
+
     const beforeSignature = inventorySignature(bot);
     const tossResult = await tossStackAsync(bot, liveStack, beforeSignature);
     return tossResult;
