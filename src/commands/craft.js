@@ -1,6 +1,9 @@
 function createCraftCommandController(options) {
   const { getManagedBot, hasManagedBot, debugLog = () => {} } = options;
   const craftStates = new Map();
+  const TICKS_PER_SECOND = 20;
+  const RECIPE_CACHE_TTL_TICKS = 200;
+  const RECIPE_CACHE_TTL_MS = (RECIPE_CACHE_TTL_TICKS / TICKS_PER_SECOND) * 1000;
 
   function normalizeItemName(name) {
     if (!name) return '';
@@ -472,6 +475,7 @@ function createCraftCommandController(options) {
         debugLog(`craft pass ${bot.username}: no craftable frame target found`);
         state.cachedRecipeItemId = null;
         state.cachedRecipe = null;
+        state.cachedRecipeAtMs = 0;
         return;
       }
 
@@ -480,9 +484,14 @@ function createCraftCommandController(options) {
       await lookAtJitter(bot, target.frame.entity.position.offset(0, 0.5, 0));
       await sleepJitter(140, 70);
 
-      if (state.cachedRecipeItemId !== target.itemId) {
+      const nowMs = Date.now();
+      const cacheExpired =
+        !state.cachedRecipeAtMs || (nowMs - state.cachedRecipeAtMs) >= RECIPE_CACHE_TTL_MS;
+
+      if (state.cachedRecipeItemId !== target.itemId || cacheExpired) {
         state.cachedRecipeItemId = target.itemId;
         state.cachedRecipe = target.recipe;
+        state.cachedRecipeAtMs = nowMs;
       }
 
       const recipe = state.cachedRecipe;
@@ -577,7 +586,8 @@ function createCraftCommandController(options) {
       running: false,
       timeout: null,
       cachedRecipeItemId: null,
-      cachedRecipe: null
+      cachedRecipe: null,
+      cachedRecipeAtMs: 0
     };
 
     craftStates.set(botName, state);
