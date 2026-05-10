@@ -2,8 +2,6 @@ function createCraftCommandController(options) {
   const { getManagedBot, hasManagedBot, debugLog = () => {} } = options;
   const craftStates = new Map();
 
-  // ── shared helpers ────────────────────────────────────────────────────────
-
   function normalizeItemName(name) {
     if (!name) return '';
     const value = String(name).trim().toLowerCase();
@@ -15,19 +13,76 @@ function createCraftCommandController(options) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // Returns a delay of `base` ± up to `jitter` ms, minimum 50ms.
-  function sleepJitter(base, jitter) {
+  function randomDelay(base, jitter) {
     const delta = Math.floor((Math.random() * 2 - 1) * jitter);
-    return sleep(Math.max(50, base + delta));
+    return Math.max(50, base + delta);
   }
 
-  // Looks at `basePos` with tiny random noise so yaw/pitch are never identical
-  // across repeated looks at the same entity (defeats AimModulo360 checks).
+  async function sleepJitter(base, jitter) {
+    await sleep(randomDelay(base, jitter));
+  }
+
   async function lookAtJitter(bot, basePos) {
     const jx = (Math.random() * 2 - 1) * 0.07;
     const jy = (Math.random() * 2 - 1) * 0.05;
     const jz = (Math.random() * 2 - 1) * 0.07;
     await bot.lookAt(basePos.offset(jx, jy, jz), true).catch(() => {});
+  }
+
+  function getRegistryFromBot(bot) {
+    return bot.registry || bot.game?.registry || null;
+  }
+
+  function getItemIdByName(bot, name) {
+    const registry = getRegistryFromBot(bot);
+    const entry = registry?.itemsByName?.[name];
+    return entry && Number.isFinite(entry.id) ? entry.id : null;
+  }
+
+  function getItemNameFromId(bot, itemId) {
+    const registry = getRegistryFromBot(bot);
+    if (!registry || !Array.isArray(registry.items)) return null;
+
+    const indexed = registry.items[itemId];
+    if (indexed && typeof indexed.name === 'string') return indexed.name;
+
+    const found = registry.items.find((item) => item && item.id === itemId);
+    return found ? found.name : null;
+  }
+
+  function getEntityTypeName(bot, entity) {
+    const registry = getRegistryFromBot(bot);
+    const typeId = Number(entity?.type);
+    const fromRegistry = registry?.entities?.find((entry) => entry && entry.id === typeId);
+    if (fromRegistry && fromRegistry.name) {
+      return String(fromRegistry.name).toLowerCase();
+    }
+
+    return String(entity?.name || entity?.displayName || '').toLowerCase();
+  }
+
+  function getFrameEntityTypeIds(bot) {
+    const registry = getRegistryFromBot(bot);
+    const ids = new Set();
+    if (!registry?.entitiesByName) return ids;
+
+    const itemFrame = registry.entitiesByName.item_frame;
+    const glowItemFrame = registry.entitiesByName.glow_item_frame;
+    if (itemFrame && Number.isFinite(itemFrame.id)) ids.add(itemFrame.id);
+    if (glowItemFrame && Number.isFinite(glowItemFrame.id)) ids.add(glowItemFrame.id);
+    return ids;
+  }
+
+  function isItemFrameEntity(bot, entity) {
+    const ids = getFrameEntityTypeIds(bot);
+    if (ids.has(entity?.type)) return true;
+
+    const typeName = getEntityTypeName(bot, entity);
+    return (
+      typeName.includes('item_frame') ||
+      typeName.includes('item frame') ||
+      typeName.includes('glow_item_frame')
+    );
   }
 
   function inventorySignature(bot) {
@@ -39,11 +94,11 @@ function createCraftCommandController(options) {
 
   function tossStackAsync(bot, item, beforeSignature) {
     return new Promise((resolve, reject) => {
-      let finished = false;
+      let done = false;
 
-      const end = (result) => {
-        if (finished) return;
-        finished = true;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
         clearInterval(poll);
         clearTimeout(timeout);
         resolve(result);
@@ -51,47 +106,37 @@ function createCraftCommandController(options) {
 
       bot.toss(item.type, item.metadata ?? null, item.count, (error) => {
         if (error) {
-          if (finished) return;
-          finished = true;
+          if (done) return;
+          done = true;
           clearInterval(poll);
           clearTimeout(timeout);
           reject(error);
           return;
         }
-        end({ changed: inventorySignature(bot) !== beforeSignature, source: 'callback' });
+
+        finish({ changed: inventorySignature(bot) !== beforeSignature, source: 'callback' });
       });
 
       const poll = setInterval(() => {
         if (inventorySignature(bot) !== beforeSignature) {
-          end({ changed: true, source: 'inventory-change' });
+          finish({ changed: true, source: 'inventory-change' });
         }
-      }, 25);
+      }, 75);
 
-      const timeout = setTimeout(() => end({ changed: false, source: 'timeout' }), 350);
+      const timeout = setTimeout(() => {
+        finish({ changed: false, source: 'timeout' });
+      }, 1200);
     });
   }
 
-  function getRegistryFromBot(bot) {
-    return bot.registry || bot.game?.registry || null;
-  }
-
-  function getEntityTypeNameFromId(bot, entityTypeId) {
+  function findCraftingTable(bot, maxDistance = 6) {
     const registry = getRegistryFromBot(bot);
-    if (!registry || !Array.isArray(registry.entities)) return null;
-    const found = registry.entities.find((e) => e && e.id === entityTypeId);
-    return found ? String(found.name).toLowerCase() : null;
+    const tableBlock = registry?.blocksByName?.crafting_table;
+    if (!tableBlock) return null;
+    return bot.findBlock({ matching: tableBlock.id, maxDistance });
   }
 
-  function getItemNameFromId(bot, itemId) {
-    const registry = getRegistryFromBot(bot);
-    if (!registry || !Array.isArray(registry.items)) return null;
-    const indexed = registry.items[itemId];
-    if (indexed && typeof indexed.name === 'string') return indexed.name;
-    const found = registry.items.find((item) => item && item.id === itemId);
-    return found ? found.name : null;
-  }
-
-  function collectItemCandidates(node, names, ids, seen) {
+  function scanFrameCandidates(node, candidates, seen) {
     if (!node || typeof node !== 'object') return;
     if (seen.has(node)) return;
     seen.add(node);
@@ -99,137 +144,117 @@ function createCraftCommandController(options) {
     const nameKeys = ['name', 'itemName', 'identifier', 'namespacedName', 'resourceLocation'];
     for (const key of nameKeys) {
       const value = node[key];
-      if (typeof value === 'string' && value.trim()) names.push(value.trim());
+      if (typeof value === 'string' && value.trim()) {
+        candidates.push({ type: 'name', value: value.trim(), weight: 3 });
+      }
     }
 
-    const idKeys = ['itemId', 'id', 'type', 'networkId', 'runtimeId'];
-    for (const key of idKeys) {
-      const value = node[key];
-      if (typeof value === 'number' && Number.isFinite(value)) ids.push(value);
-      if (typeof value === 'string' && value.trim()) {
-        const numeric = Number(value);
-        if (Number.isFinite(numeric)) ids.push(numeric);
+    const hasStackLikeShape =
+      Object.prototype.hasOwnProperty.call(node, 'count') ||
+      Object.prototype.hasOwnProperty.call(node, 'itemCount') ||
+      Object.prototype.hasOwnProperty.call(node, 'metadata') ||
+      Object.prototype.hasOwnProperty.call(node, 'nbtData') ||
+      Object.prototype.hasOwnProperty.call(node, 'present');
+
+    if (Number.isFinite(node.itemId)) {
+      candidates.push({ type: 'id', value: Number(node.itemId), weight: 5 });
+    }
+
+    if (hasStackLikeShape && Number.isFinite(node.id)) {
+      candidates.push({ type: 'id', value: Number(node.id), weight: 4 });
+    }
+
+    if (hasStackLikeShape && typeof node.id === 'string' && node.id.trim()) {
+      const parsed = Number(node.id);
+      if (Number.isFinite(parsed)) {
+        candidates.push({ type: 'id', value: parsed, weight: 4 });
       }
+    }
+
+    const directValue = Object.prototype.hasOwnProperty.call(node, 'value') ? node.value : null;
+    if (directValue && typeof directValue === 'object') {
+      scanFrameCandidates(directValue, candidates, seen);
     }
 
     for (const child of Object.values(node)) {
       if (!child) continue;
       if (Array.isArray(child)) {
-        for (const entry of child) collectItemCandidates(entry, names, ids, seen);
-        continue;
+        for (const entry of child) {
+          scanFrameCandidates(entry, candidates, seen);
+        }
+      } else if (typeof child === 'object') {
+        scanFrameCandidates(child, candidates, seen);
       }
-      if (typeof child === 'object') collectItemCandidates(child, names, ids, seen);
     }
   }
 
-  function resolveFrameItemFromCandidates(bot, names, ids) {
-    const skip = new Set(['item_frame', 'glow_item_frame', 'item frame', 'player']);
-    for (const candidate of names) {
-      const normalized = normalizeItemName(candidate);
-      if (!normalized || skip.has(normalized)) continue;
-      return { itemName: normalized, itemId: null };
-    }
-    for (const id of ids) {
-      const name = getItemNameFromId(bot, id);
-      if (name) return { itemName: normalizeItemName(name), itemId: id };
-    }
-    if (ids.length > 0) return { itemName: null, itemId: ids[0] };
-    return null;
-  }
-
-  function readItemFrameItemData(bot, entity) {
+  function resolveFrameItemData(bot, entity) {
     if (!entity || !Array.isArray(entity.metadata)) return null;
-    const names = [];
-    const ids = [];
+
+    const candidates = [];
     const seen = new Set();
     for (const entry of entity.metadata) {
-      collectItemCandidates(entry, names, ids, seen);
-      const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : null;
-      collectItemCandidates(value, names, ids, seen);
+      scanFrameCandidates(entry, candidates, seen);
     }
-    return resolveFrameItemFromCandidates(bot, names, ids);
-  }
 
-  function getFrameEntityTypeIds(bot) {
-    const registry = getRegistryFromBot(bot);
-    if (!registry || !registry.entitiesByName) return new Set();
-    const ids = new Set();
-    const itemFrame = registry.entitiesByName.item_frame;
-    const glowItemFrame = registry.entitiesByName.glow_item_frame;
-    if (itemFrame && Number.isFinite(itemFrame.id)) ids.add(itemFrame.id);
-    if (glowItemFrame && Number.isFinite(glowItemFrame.id)) ids.add(glowItemFrame.id);
-    return ids;
-  }
+    if (candidates.length === 0) return null;
 
-  function getEntityTypeName(bot, entity) {
-    const fromType = getEntityTypeNameFromId(bot, Number(entity?.type));
-    if (fromType) return fromType;
-    const raw = entity?.name || entity?.displayName || '';
-    return String(raw).toLowerCase();
-  }
+    candidates.sort((a, b) => b.weight - a.weight);
 
-  function isItemFrameEntity(bot, entity) {
-    const frameTypeIds = getFrameEntityTypeIds(bot);
-    if (frameTypeIds.has(entity?.type)) return true;
-    const typeName = getEntityTypeName(bot, entity);
-    return (
-      typeName.includes('item_frame') ||
-      typeName.includes('item frame') ||
-      typeName.includes('glow_item_frame')
-    );
-  }
+    const skipNames = new Set(['item_frame', 'glow_item_frame', 'item frame', 'player']);
 
-  function getItemIdByName(bot, name) {
-    const registry = getRegistryFromBot(bot);
-    const entry = registry?.itemsByName?.[name];
-    return entry && Number.isFinite(entry.id) ? entry.id : null;
-  }
+    for (const candidate of candidates) {
+      if (candidate.type === 'name') {
+        const normalized = normalizeItemName(candidate.value);
+        if (!normalized || skipNames.has(normalized)) continue;
 
-  // ── craft-specific helpers ─────────────────────────────────────────────────
+        const id = getItemIdByName(bot, normalized);
+        if (Number.isFinite(id)) {
+          return { itemId: id, itemName: normalized };
+        }
+      }
+    }
 
-  function findCraftingTable(bot, maxDistance = 6) {
-    const registry = getRegistryFromBot(bot);
-    if (!registry || !registry.blocksByName) return null;
-    const tableBlock = registry.blocksByName.crafting_table;
-    if (!tableBlock) return null;
-    return bot.findBlock({ matching: tableBlock.id, maxDistance });
+    for (const candidate of candidates) {
+      if (candidate.type !== 'id') continue;
+      const name = getItemNameFromId(bot, candidate.value);
+      if (!name) continue;
+      return { itemId: candidate.value, itemName: normalizeItemName(name) };
+    }
+
+    return null;
   }
 
   function getItemFramesNearPosition(bot, pos, radius = 4) {
     const frames = [];
+
     for (const entity of Object.values(bot.entities)) {
       if (!entity || !entity.position) continue;
       if (!isItemFrameEntity(bot, entity)) continue;
+
       const dx = entity.position.x - pos.x;
       const dy = entity.position.y - pos.y;
       const dz = entity.position.z - pos.z;
       const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (distance > radius) continue;
-      const itemData = readItemFrameItemData(bot, entity);
-      if (!itemData || (!itemData.itemName && !Number.isFinite(itemData.itemId))) {
-        debugLog(`craft frame near table but item unreadable`, {
-          bot: bot.username,
-          entityId: entity.id,
-          type: entity.type,
-          metadataEntries: Array.isArray(entity.metadata) ? entity.metadata.length : 0
-        });
+
+      const itemData = resolveFrameItemData(bot, entity);
+      if (!itemData || !Number.isFinite(itemData.itemId)) {
         continue;
       }
-      frames.push({
-        entity,
-        itemName: itemData.itemName ? normalizeItemName(itemData.itemName) : null,
-        itemId: Number.isFinite(itemData.itemId) ? itemData.itemId : null,
-        distance
-      });
+
+      frames.push({ entity, distance, itemId: itemData.itemId, itemName: itemData.itemName });
     }
+
     frames.sort((a, b) => a.distance - b.distance);
     return frames;
   }
 
-  function resolveFrameItemId(bot, frame) {
-    if (Number.isFinite(frame.itemId)) return frame.itemId;
-    if (frame.itemName) return getItemIdByName(bot, frame.itemName);
-    return null;
+  function getIngredientCount(ingredient) {
+    if (!ingredient || typeof ingredient !== 'object') return 1;
+    if (Number.isFinite(ingredient.count) && ingredient.count > 0) return ingredient.count;
+    if (Number.isFinite(ingredient.itemCount) && ingredient.itemCount > 0) return ingredient.itemCount;
+    return 1;
   }
 
   function getRecipeRequirementCounts(recipe) {
@@ -244,19 +269,22 @@ function createCraftCommandController(options) {
     }
 
     const ingredients = [];
-    if (recipe.inShape) {
+    if (Array.isArray(recipe.inShape)) {
       for (const row of recipe.inShape) {
-        for (const ing of row) {
-          if (ing && ing.id !== -1) ingredients.push(ing);
+        if (!Array.isArray(row)) continue;
+        for (const ingredient of row) {
+          if (ingredient && ingredient.id !== -1) ingredients.push(ingredient);
         }
       }
-    } else if (recipe.ingredients) {
-      ingredients.push(...recipe.ingredients);
+    } else if (Array.isArray(recipe.ingredients)) {
+      for (const ingredient of recipe.ingredients) {
+        if (ingredient && ingredient.id !== -1) ingredients.push(ingredient);
+      }
     }
 
-    for (const ing of ingredients) {
-      if (!ing || ing.id === -1) continue;
-      required.set(ing.id, (required.get(ing.id) || 0) + 1);
+    for (const ingredient of ingredients) {
+      const units = getIngredientCount(ingredient);
+      required.set(ingredient.id, (required.get(ingredient.id) || 0) + units);
     }
 
     return required;
@@ -267,100 +295,80 @@ function createCraftCommandController(options) {
     if (required.size === 0) return 0;
 
     let max = Infinity;
-    for (const [id, needed] of required) {
-      const have = bot.inventory.count(id, null);
+    for (const [itemId, needed] of required) {
+      const have = bot.inventory.count(itemId, null);
       max = Math.min(max, Math.floor(have / needed));
     }
 
-    return max === Infinity ? 0 : max;
+    return Number.isFinite(max) ? max : 0;
   }
 
-  function getRecipeIngredientIds(recipe) {
+  function recipeIngredientIds(recipe) {
     return new Set(getRecipeRequirementCounts(recipe).keys());
   }
 
-  async function tossNonIngredients(bot, recipe, state) {
-    const keep = getRecipeIngredientIds(recipe);
-    const tossTypes = [...new Set(
-      bot.inventory.items()
-        .filter((it) => !keep.has(it.type))
-        .map((it) => it.type)
-    )];
-
-    for (const type of tossTypes) {
-      if (!state.enabled) break;
-      await tossAllOfType(bot, type, state);
-    }
-  }
-
-  async function tossAllOfType(bot, itemType, state) {
+  async function tossItemType(bot, itemType, state) {
     let stagnant = 0;
 
     while (state.enabled) {
-      const stack = bot.inventory.items().find((it) => it.type === itemType);
+      const stack = bot.inventory.items().find((item) => item.type === itemType);
       if (!stack) break;
 
-      const beforeToss = inventorySignature(bot);
-      let tossResult;
+      const beforeSignature = inventorySignature(bot);
+      let result;
       try {
-        tossResult = await tossStackAsync(bot, stack, beforeToss);
-      } catch (err) {
-        debugLog(`craft toss failed ${bot.username}: ${err.message}`);
+        result = await tossStackAsync(bot, stack, beforeSignature);
+      } catch (error) {
+        debugLog(`craft toss failed ${bot.username}: ${error.message}`);
         break;
       }
 
-      if (!tossResult.changed) {
+      if (!result.changed) {
         stagnant += 1;
-        if (stagnant >= 2) break;
+        if (stagnant >= 3) break;
       } else {
         stagnant = 0;
       }
 
-      await sleepJitter(110, 50);
+      await sleepJitter(130, 60);
     }
   }
 
-  // Toss output items from inventory.
-  async function tossViaOffhand(bot, itemType, state) {
-    let stagnant = 0;
-
-    while (state.enabled) {
-      const stack = bot.inventory.items().find((it) => it.type === itemType);
-      if (!stack) break;
-
-      const beforeToss = inventorySignature(bot);
-      let tossResult;
-      try {
-        tossResult = await tossStackAsync(bot, stack, beforeToss);
-      } catch (err) {
-        debugLog(`craft toss failed ${bot.username}: ${err.message}`);
-        break;
-      }
-
-      if (!tossResult.changed) {
-        stagnant += 1;
-        if (stagnant >= 2) break;
-      } else {
-        stagnant = 0;
-      }
-
-      await sleepJitter(110, 50);
-    }
+  async function tossOutput(bot, recipe, state) {
+    const outputId = recipe?.result?.id;
+    if (!Number.isFinite(outputId)) return;
+    await tossItemType(bot, outputId, state);
   }
 
-  // Toss non-ingredient items to keep inventory clean.
-  async function tossGarbageViaOffhand(bot, recipe, state) {
-    const ingredientIds = getRecipeIngredientIds(recipe);
+  async function tossGarbage(bot, recipe, state) {
+    const keep = recipeIngredientIds(recipe);
     const garbageTypes = [...new Set(
       bot.inventory.items()
-        .filter((it) => !ingredientIds.has(it.type))
-        .map((it) => it.type)
+        .filter((item) => !keep.has(item.type))
+        .map((item) => item.type)
     )];
 
-    for (const itemType of garbageTypes) {
+    for (const type of garbageTypes) {
       if (!state.enabled) break;
-      await tossViaOffhand(bot, itemType, state);
+      await tossItemType(bot, type, state);
     }
+  }
+
+  function getCraftTarget(bot, craftingTable) {
+    const frames = getItemFramesNearPosition(bot, craftingTable.position);
+
+    for (const frame of frames) {
+      const recipes = bot.recipesFor(frame.itemId, null, 1, craftingTable);
+      if (recipes.length === 0) continue;
+
+      return {
+        frame,
+        itemId: frame.itemId,
+        recipe: recipes[0]
+      };
+    }
+
+    return null;
   }
 
   async function runCraftPass(bot, state) {
@@ -368,88 +376,49 @@ function createCraftCommandController(options) {
     if (!bot.entity || !bot.inventory) return;
 
     state.running = true;
-
     try {
       const craftingTable = findCraftingTable(bot);
       if (!craftingTable) {
-        debugLog(`craft pass ${bot.username}: no crafting table found within range`);
+        debugLog(`craft pass ${bot.username}: no crafting table found`);
         return;
       }
 
-      debugLog(`craft pass ${bot.username}: crafting table at ${craftingTable.position}`);
-
-      const frames = getItemFramesNearPosition(bot, craftingTable.position);
-      if (frames.length === 0) {
-        debugLog(`craft pass ${bot.username}: no item frames near crafting table`);
-        return;
-      }
-
-      const targetFrame = frames[0];
-      const targetItemId = resolveFrameItemId(bot, targetFrame);
-
-      if (targetItemId === null) {
-        debugLog(`craft pass ${bot.username}: could not resolve item id from frame`, targetFrame);
-        return;
-      }
-
-      debugLog(
-        `craft pass ${bot.username}: target item id=${targetItemId} name=${targetFrame.itemName ?? 'unknown'}`
-      );
-
-      // Always face the item frame first; craft and toss without changing look direction.
-      await lookAtJitter(bot, targetFrame.entity.position.offset(0, 0.5, 0));
-      await sleepJitter(150, 70);
-
-      // Use cached recipe to avoid re-querying every pass. Clear cache when target changes.
-      if (state.cachedRecipeItemId !== targetItemId) {
-        state.cachedRecipe = null;
+      const target = getCraftTarget(bot, craftingTable);
+      if (!target) {
+        debugLog(`craft pass ${bot.username}: no craftable frame target found`);
         state.cachedRecipeItemId = null;
+        state.cachedRecipe = null;
+        return;
       }
 
-      if (!state.cachedRecipe) {
-        const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
-        if (recipes.length === 0) {
-          debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
-          return;
-        }
-        state.cachedRecipe = recipes[0];
-        state.cachedRecipeItemId = targetItemId;
-        debugLog(`craft pass ${bot.username}: recipe cached for item ${targetItemId}`);
+      if (!state.enabled) return;
+
+      await lookAtJitter(bot, target.frame.entity.position.offset(0, 0.5, 0));
+      await sleepJitter(140, 70);
+
+      if (state.cachedRecipeItemId !== target.itemId) {
+        state.cachedRecipeItemId = target.itemId;
+        state.cachedRecipe = target.recipe;
       }
 
       const recipe = state.cachedRecipe;
-      debugLog(`craft pass ${bot.username}: crafting with recipe`, {
-        result: recipe.result,
-        requiresTable: recipe.requiresTable
-      });
+      if (!recipe) return;
 
-      const resultCount = Math.max(1, Number(recipe.result?.count) || 1);
-      const maxCrafts = maxCraftableCount(bot, recipe);
-
-      if (maxCrafts <= 0) {
-        const requirements = [...getRecipeRequirementCounts(recipe).entries()]
-          .map(([id, needed]) => `${id}x${needed}`)
-          .join(', ');
-        debugLog(`craft pass ${bot.username}: no ingredients available to craft`, {
-          requirements,
-          inventoryItems: bot.inventory.items().map((item) => `${item.type}x${item.count}`)
-        });
+      const initialCraftCount = maxCraftableCount(bot, recipe);
+      if (initialCraftCount <= 0) {
+        debugLog(`craft pass ${bot.username}: missing ingredients for target ${target.itemId}`);
         return;
       }
 
-      const craftCount = maxCrafts;
-
-      // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
         bot.closeWindow(bot.currentWindow);
-        await sleepJitter(250, 100);
+        await sleepJitter(220, 80);
       }
 
-      debugLog(`craft pass ${bot.username}: craftCount=${craftCount} (crafting all available)`);
+      if (!state.enabled) return;
 
-      // Craft all available — equivalent to shift-clicking the result slot.
       try {
-        await bot.craft(recipe, craftCount, craftingTable);
+        await bot.craft(recipe, initialCraftCount, craftingTable);
       } catch (error) {
         const message = String(error?.message || '').toLowerCase();
         const inventoryLikelyFull =
@@ -457,56 +426,55 @@ function createCraftCommandController(options) {
 
         if (!inventoryLikelyFull) throw error;
 
-        // Inventory full mid-craft: drain output and retry the whole batch once.
-        debugLog(`craft pass ${bot.username}: inventory tight, draining then retrying`);
-        await tossViaOffhand(bot, recipe.result.id, state);
-        await sleepJitter(130, 60);
+        debugLog(`craft pass ${bot.username}: inventory full, draining and retrying once`);
+        await tossOutput(bot, recipe, state);
+        await sleepJitter(150, 60);
+
+        if (!state.enabled) return;
 
         if (bot.currentWindow) {
           bot.closeWindow(bot.currentWindow);
-          await sleepJitter(100, 50);
+          await sleepJitter(120, 50);
         }
 
-        await bot.craft(recipe, craftCount, craftingTable);
+        const retryCraftCount = maxCraftableCount(bot, recipe);
+        if (retryCraftCount > 0) {
+          await bot.craft(recipe, retryCraftCount, craftingTable);
+        }
       }
 
-      // Toss crafted output.
-      await sleepJitter(100, 40);
+      if (!state.enabled) return;
 
-      await tossViaOffhand(bot, recipe.result.id, state);
+      await sleepJitter(110, 40);
+      await tossOutput(bot, recipe, state);
+      await tossGarbage(bot, recipe, state);
 
-      // Toss any garbage items that accumulated.
-      await tossGarbageViaOffhand(bot, recipe, state);
-
-      debugLog(`craft pass ${bot.username}: done`);
+      debugLog(
+        `craft pass ${bot.username}: done item=${target.itemId} frame=${target.frame.itemName || 'unknown'}`
+      );
     } catch (error) {
       console.warn(`[${bot.username}] craft pass error: ${error.message}`);
-      // Close any stuck window and pause before retrying to let the server recover.
       try {
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
       } catch (_) {}
-      await sleepJitter(3500, 800);
+      await sleepJitter(2000, 600);
     } finally {
       state.running = false;
     }
   }
 
-  function scheduleCraftPass(bot, state) {
+  function scheduleNextPass(bot, state) {
     if (!state.enabled) return;
-    if (state.running) return;
-    runCraftPass(bot, state).catch((error) => {
-      console.warn(`[${bot.username}] craft pass failed: ${error.message}`);
-    });
-  }
 
-  // Schedule the next craft pass with a fast randomised delay (5-15 ticks / 250-750ms).
-  // Always uses fast cycle regardless of craft success/failure.
-  function scheduleNext(bot, state) {
-    if (!state.enabled) return;
-    const delay = 500 + Math.floor((Math.random() * 2 - 1) * 250);
+    const delay = randomDelay(500, 250);
     state.timeout = setTimeout(() => {
-      scheduleCraftPass(bot, state);
-      scheduleNext(bot, state);
+      runCraftPass(bot, state)
+        .catch((error) => {
+          console.warn(`[${bot.username}] craft pass failed: ${error.message}`);
+        })
+        .finally(() => {
+          scheduleNextPass(bot, state);
+        });
     }, delay);
   }
 
@@ -520,12 +488,18 @@ function createCraftCommandController(options) {
       return { ok: false, message: `Bot ${botName} not found` };
     }
 
-    const state = { enabled: true, running: false, bot, cachedRecipe: null, cachedRecipeItemId: null };
-
-    scheduleNext(bot, state);
+    const state = {
+      enabled: true,
+      running: false,
+      timeout: null,
+      cachedRecipeItemId: null,
+      cachedRecipe: null
+    };
 
     craftStates.set(botName, state);
+    scheduleNextPass(bot, state);
     debugLog(`craft enabled for ${botName}`);
+
     return { ok: true, message: `Crafter enabled for ${botName}` };
   }
 
@@ -537,7 +511,11 @@ function createCraftCommandController(options) {
     }
 
     state.enabled = false;
-    if (state.timeout) clearTimeout(state.timeout);
+    if (state.timeout) {
+      clearTimeout(state.timeout);
+      state.timeout = null;
+    }
+
     craftStates.delete(botName);
     debugLog(`craft disabled for ${botName}`);
     return true;
@@ -555,7 +533,7 @@ function createCraftCommandController(options) {
 
   function handleCraftCommand(parts) {
     const botName = parts[0];
-    const sub = (parts[1] || '').toLowerCase();
+    const sub = String(parts[1] || '').toLowerCase();
 
     if (!botName || !sub) {
       return 'Usage: +craft <botname> <enable|disable>';
