@@ -9,6 +9,7 @@ const createSaveLoadController = require('./commands/save');
 const createCraftCommandController = require('./commands/craft');
 const createDropCommandController = require('./commands/drop');
 const createEventReactorController = require('./commands/eventreactor');
+const injectCraftPlugin = require('./plugins/craft');
 
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
@@ -254,6 +255,8 @@ function createBot(botName, serverConfig) {
     version: MINECRAFT_VERSION,
     physicsEnabled: true
   });
+
+  injectCraftPlugin(bot);
 
   attachAutoAuthFlow(bot, SERVER_IP);
 
