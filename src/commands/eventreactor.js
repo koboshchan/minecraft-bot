@@ -193,10 +193,10 @@ function createEventReactorController(options) {
       onCollect: null,
       onWindowOpen: null,
       config: {
-        triggerEvent: 'item_pickup',
-        reaction: 'say_in_chat',
+        triggerEvent: 'inventory_full',
+        reaction: 'run_command',
         chatMessage: 'EventReactor triggered!',
-        command: 'spawn',
+        command: 'esellall',
         targetFeature: 'craft',
         healthThreshold: 6,
         cooldownTicks: 20

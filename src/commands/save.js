@@ -5,7 +5,7 @@ const SETTINGS_DIR = path.resolve('./settings');
 const DEFAULT_LOAD_JOIN_INTERVAL_MS = 5000;
 
 function createSaveLoadController(options) {
-  const { botCommands, sortCommands, craftCommands, serverConfig, debugLog = () => {} } = options;
+  const { botCommands, sortCommands, craftCommands, eventReactorCommands, serverConfig, debugLog = () => {} } = options;
 
   function ensureSettingsDir() {
     if (!fs.existsSync(SETTINGS_DIR)) {
@@ -28,7 +28,8 @@ function createSaveLoadController(options) {
     const bots = botNames.map((botName) => ({
       name: botName,
       sorterEnabled: sortCommands.isSorterEnabled(botName),
-      crafterEnabled: craftCommands ? craftCommands.isCrafterEnabled(botName) : false
+      crafterEnabled: craftCommands ? craftCommands.isCrafterEnabled(botName) : false,
+      eventReactorEnabled: eventReactorCommands ? eventReactorCommands.isEventReactorEnabled(botName) : false
     }));
 
     const data = { bots };
@@ -97,6 +98,11 @@ function createSaveLoadController(options) {
       if (entry.crafterEnabled && craftCommands) {
         const craftResult = craftCommands.handleCraftCommand([entry.name, 'enable']);
         debugLog(`load craft-enable: ${entry.name}`, craftResult);
+      }
+
+      if (entry.eventReactorEnabled && eventReactorCommands) {
+        const erResult = eventReactorCommands.handleEventReactorCommand([entry.name, 'enable']);
+        debugLog(`load er-enable: ${entry.name}`, erResult);
       }
     };
 

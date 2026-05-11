@@ -342,6 +342,7 @@ const saveLoadCommands = createSaveLoadController({
   botCommands,
   sortCommands,
   craftCommands,
+  eventReactorCommands,
   serverConfig: parseServerAddress(SERVER_IP),
   debugLog
 });
