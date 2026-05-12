@@ -479,7 +479,7 @@ function createSortCommandController(options) {
           const needsTurn = target.entity.id !== lastFrameEntityId;
           if (needsTurn) {
             await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
-            await sleepJitter(200, 80);
+            await sleep(150); // wait 3 ticks before throwing after turn
           }
           lastFrameEntityId = target.entity.id;
 
@@ -495,7 +495,8 @@ function createSortCommandController(options) {
                 `sort toss ${bot.username}: ${liveStack.name}#${liveStack.type} -> frame(${target.itemName || 'id-only'}#${target.itemId})`
               );
 
-              const tossResult = await lookAtFrameAndTossStack(bot, target, liveStack);
+              const beforeSignature = inventorySignature(bot);
+              const tossResult = await tossStackAsync(bot, liveStack, beforeSignature);
               if (!tossResult) {
                 break;
               }
@@ -553,20 +554,6 @@ function createSortCommandController(options) {
     runSortPass(bot, state).catch((error) => {
       console.warn(`[${bot.username}] sort pass failed: ${error.message}`);
     });
-  }
-
-  async function lookAtFrameAndTossStack(bot, target, item) {
-    const liveStack = bot.inventory?.slots?.[item.slot];
-    if (!liveStack) {
-      return false;
-    }
-
-    await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
-    await sleepJitter(120, 40);
-
-    const beforeSignature = inventorySignature(bot);
-    const tossResult = await tossStackAsync(bot, liveStack, beforeSignature);
-    return tossResult;
   }
 
   function disableSorter(botName) {
