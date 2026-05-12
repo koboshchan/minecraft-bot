@@ -6,15 +6,17 @@ function createDropCommandController(options) {
       const items = bot.inventory.items();
       if (items.length === 0) return;
 
-      // Drop all items without a delay
+      let droppedStacks = 0;
+      // Drop all items sequentially and quickly using the drop window shortcut
       for (const item of items) {
-        if (bot.tossStack) {
-          bot.tossStack(item).catch(() => {});
-        } else {
-          bot.toss(item.type, item.metadata, item.count).catch(() => {});
+        try {
+          await bot.clickWindow(item.slot, 1, 4);
+          droppedStacks++;
+        } catch (e) {
+          debugLog(`Failed to drop slot ${item.slot}: ${e.message}`);
         }
       }
-      debugLog(`drop finished for ${botName}: stacks=${items.length}`);
+      debugLog(`drop finished for ${botName}: stacks=${droppedStacks}`);
     } catch (error) {
       debugLog(`drop failed for ${botName}: ${error.message}`);
     }
@@ -40,7 +42,9 @@ function createDropCommandController(options) {
       return `No items to drop for ${botName}`;
     }
 
-    dropAll(botName, bot);
+    dropAll(botName, bot).catch(e => {
+        debugLog(`drop catch error: ${e.message}`);
+    });
 
     return `Dropping all items for ${botName}`;
   }
