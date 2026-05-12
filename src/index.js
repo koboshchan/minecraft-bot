@@ -9,6 +9,7 @@ const createSaveLoadController = require('./commands/save');
 const createCraftCommandController = require('./commands/craft');
 const createDropCommandController = require('./commands/drop');
 const createEventReactorController = require('./commands/eventreactor');
+const createStatusCommandController = require('./commands/status');
 const injectCraftPlugin = require('./plugins/craft');
 
 const COMMAND_PREFIX = '+';
@@ -42,6 +43,7 @@ let sortCommands = null;
 let craftCommands = null;
 let dropCommands = null;
 let eventReactorCommands = null;
+let statusCommands = null;
 
 function debugLog(message, extra) {
   if (!DEBUG) {
@@ -331,12 +333,20 @@ dropCommands = createDropCommandController({
 });
 
 eventReactorCommands = createEventReactorController({
-  getManagedBot: botCommands.getManagedBot,
-  hasManagedBot: botCommands.hasManagedBot,
-  sortCommands,
-  craftCommands,
-  debugLog
-});
+    getManagedBot: botCommands.getManagedBot,
+    hasManagedBot: botCommands.hasManagedBot,
+    sortCommands,
+    craftCommands,
+    debugLog
+  });
+
+  statusCommands = createStatusCommandController({
+    getManagedBot: botCommands.getManagedBot,
+    hasManagedBot: botCommands.hasManagedBot,
+    sortCommands,
+    craftCommands,
+    eventReactorCommands
+  });
 
 const saveLoadCommands = createSaveLoadController({
   botCommands,
@@ -413,6 +423,8 @@ function main() {
       result = saveLoadCommands.handleSaveCommand(parsed.parts);
     } else if (parsed.command === 'load') {
       result = saveLoadCommands.handleLoadCommand(parsed.parts);
+    } else if (parsed.command === 'status') {
+      result = statusCommands.handleStatusCommand(parsed.parts);
     } else if (parsed.command === 'craft') {
       result = craftCommands.handleCraftCommand(parsed.parts);
     } else if (parsed.command === 'drop') {
