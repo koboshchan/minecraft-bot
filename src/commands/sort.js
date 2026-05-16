@@ -31,68 +31,46 @@ function createSortCommandController(options) {
     await bot.lookAt(basePos.offset(jx, jy, jz), true).catch(() => {});
   }
 
-  function tossStackAsync(bot, item, beforeSignature) {
-    return new Promise((resolve, reject) => {
+  async function tossStackAsync(bot, item, beforeSignature) {
+    return new Promise((resolve) => {
       let finished = false;
 
       const end = (result) => {
-        if (finished) {
-          return;
-        }
-
+        if (finished) return;
         finished = true;
-        clearInterval(poll);
         clearTimeout(timeout);
         resolve(result);
       };
 
-      // Keep tosses serialized: concurrent toss() calls can corrupt mineflayer transfer state.
-      // Use slot-based toss when possible to avoid type lookup races.
       try {
-        const onTossDone = (error) => {
-          if (error) {
-            if (finished) {
-              return;
-            }
-
-            finished = true;
-            clearInterval(poll);
-            clearTimeout(timeout);
-            reject(error);
-            return;
-          }
-
-          const current = inventorySignature(bot);
-          end({ changed: current !== beforeSignature, source: 'callback' });
-        };
-
+        let p;
+        // Use slot-based toss when possible to avoid type lookup races.
         if (typeof bot.tossStack === 'function') {
-          bot.tossStack(item, onTossDone);
+          p = bot.tossStack(item);
+        } else if (typeof bot.toss === 'function') {
+          p = bot.toss(item.type, item.metadata ?? null, item.count);
+        }
+
+        if (p instanceof Promise) {
+          p.then(() => {
+            setTimeout(() => {
+              const current = inventorySignature(bot);
+              end({ changed: current !== beforeSignature, source: 'promise-resolve' });
+            }, 100);
+          }).catch((error) => {
+            end({ changed: false, source: 'promise-error', error });
+          });
         } else {
-          bot.toss(item.type, item.metadata ?? null, item.count, onTossDone);
+          end({ changed: false, source: 'sync-unsupported' });
         }
       } catch (error) {
-        if (finished) {
-          return;
-        }
-
-        finished = true;
-        clearInterval(poll);
-        clearTimeout(timeout);
-        reject(error);
+        end({ changed: false, source: 'catch-error', error });
       }
 
-      const poll = setInterval(() => {
-        const current = inventorySignature(bot);
-        if (current !== beforeSignature) {
-          end({ changed: true, source: 'inventory-change' });
-        }
-      }, 50);
-
-      // Short cap: avoid hanging forever on servers that never fire toss callback.
+      // Hard safety timeout: avoid hanging forever on servers that never complete
       const timeout = setTimeout(() => {
         end({ changed: false, source: 'timeout' });
-      }, 500);
+      }, 1200);
     });
   }
 
@@ -506,6 +484,10 @@ function createSortCommandController(options) {
                 debugLog(
                   `sort toss no-change ${bot.username}: type=${group.type} stagnant=${stagnantForType} source=${tossResult.source}`
                 );
+                
+                // Add explicit network sleep on failures to ensure failed actions do not instantly loop
+                await sleep(500); 
+
                 if (stagnantForType >= 2) {
                   break;
                 }
@@ -519,6 +501,7 @@ function createSortCommandController(options) {
               }
             } catch (error) {
               console.warn(`[${bot.username}] sort toss failed: ${error.message}`);
+              await sleep(500); // Sleep on hard throw errors too!
               break;
             }
           }
