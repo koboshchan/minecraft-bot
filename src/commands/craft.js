@@ -245,9 +245,9 @@ function createCraftCommandController(options) {
 
       // Always face the item frame first; craft and toss without changing look direction.
         await new Promise((resolve) => {
-          bot.once('physicsTick', () => {
+          setTimeout(() => {
             bot.lookAt(targetFrame.entity.position.offset(0, 0.5, 0), true).catch(() => {}).finally(resolve);
-          });
+          }, 50);
         });
       const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
       if (recipes.length === 0) {

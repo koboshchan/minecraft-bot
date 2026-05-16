@@ -17,22 +17,13 @@ function createSortCommandController(options) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function sleepJitter(base, jitter) {
-    const delta = Math.floor((Math.random() * 2 - 1) * jitter);
-    return sleep(Math.max(50, base + delta));
-  }
-
   // Adds tiny random noise to the look target so yaw/pitch are never identical
   // across repeated looks at the same entity (defeats AimModulo360 checks).
   async function lookAtJitter(bot, basePos) {
-    const jx = (Math.random() * 2 - 1) * 0.07;
-    const jy = (Math.random() * 2 - 1) * 0.05;
-    const jz = (Math.random() * 2 - 1) * 0.07;
-    const pos = basePos.offset(jx, jy, jz);
     await new Promise((resolve) => {
-      bot.once('physicsTick', () => {
-        bot.lookAt(pos, true).catch(() => {}).finally(resolve);
-      });
+      setTimeout(() => {
+        bot.lookAt(basePos, true).catch(() => {}).finally(resolve);
+      }, 50);
     });
   }
 
@@ -61,7 +52,7 @@ function createSortCommandController(options) {
             setTimeout(() => {
               const current = inventorySignature(bot);
               end({ changed: current !== beforeSignature, source: 'promise-resolve' });
-            }, 100);
+            }, 25);
           }).catch((error) => {
             end({ changed: false, source: 'promise-error', error });
           });
@@ -462,7 +453,7 @@ function createSortCommandController(options) {
           const needsTurn = target.entity.id !== lastFrameEntityId;
           if (needsTurn) {
             await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
-            await sleep(150); // wait 3 ticks before throwing after turn
+            await sleep(50); // wait 1 tick before throwing after turn
           }
           lastFrameEntityId = target.entity.id;
 
@@ -502,7 +493,7 @@ function createSortCommandController(options) {
                 totalTossed += 1;
                 
                 // Add a network queue cooldown delay between inventory movements to prevent Folia packet spam
-                await sleep(100);
+                await sleep(25);
               }
             } catch (error) {
               console.warn(`[${bot.username}] sort toss failed: ${error.message}`);

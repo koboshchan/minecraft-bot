@@ -254,7 +254,8 @@ function createBot(botName, serverConfig) {
     host: serverConfig.host,
     port: serverConfig.port,
     username: botName,
-    version: MINECRAFT_VERSION
+    version: MINECRAFT_VERSION,
+    physicsEnabled: false
   });
 
   injectCraftPlugin(bot);
