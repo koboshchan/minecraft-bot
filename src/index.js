@@ -254,8 +254,7 @@ function createBot(botName, serverConfig) {
     host: serverConfig.host,
     port: serverConfig.port,
     username: botName,
-    version: MINECRAFT_VERSION,
-    physicsEnabled: false
+    version: MINECRAFT_VERSION
   });
 
   injectCraftPlugin(bot);
@@ -267,18 +266,6 @@ function createBot(botName, serverConfig) {
     console.log(`[${displayName}] logged in`);
     debugLog(`event login ${displayName}`);
   });
-
-  if (bot._client) {
-    bot._client.on('writePacket', (name, params) => {
-      console.log(`Outgoing Packet Name: ${name}`);
-    });
-  } else {
-    bot.on('inject_allowed', () => {
-      bot._client.on('writePacket', (name, params) => {
-        console.log(`Outgoing Packet Name: ${name}`);
-      });
-    });
-  }
 
   bot.on('end', () => {
     const displayName = bot.username || botName;
