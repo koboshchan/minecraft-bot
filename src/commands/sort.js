@@ -28,11 +28,12 @@ function createSortCommandController(options) {
     const jx = (Math.random() * 2 - 1) * 0.07;
     const jy = (Math.random() * 2 - 1) * 0.05;
     const jz = (Math.random() * 2 - 1) * 0.07;
-    await bot.lookAt(basePos.offset(jx, jy, jz), true).catch(() => {});
-  }
-
-  async function tossStackAsync(bot, item, beforeSignature) {
-    return new Promise((resolve) => {
+      const pos = basePos.offset(jx, jy, jz);
+      await new Promise((resolve) => {
+        bot.once('physicsTick', () => {
+          bot.lookAt(pos, true).catch(() => {}).finally(resolve);
+        });
+      });
       let finished = false;
 
       const end = (result) => {

@@ -244,8 +244,11 @@ function createCraftCommandController(options) {
       );
 
       // Always face the item frame first; craft and toss without changing look direction.
-      await bot.lookAt(targetFrame.entity.position.offset(0, 0.5, 0), true).catch(() => {});
-
+        await new Promise((resolve) => {
+          bot.once('physicsTick', () => {
+            bot.lookAt(targetFrame.entity.position.offset(0, 0.5, 0), true).catch(() => {}).finally(resolve);
+          });
+        });
       const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
       if (recipes.length === 0) {
         debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
