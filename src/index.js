@@ -269,13 +269,13 @@ function createBot(botName, serverConfig) {
   });
 
   if (bot._client) {
-    bot._client.on('packet', (data, meta) => {
-      console.log(`Outgoing/Incoming Packet Name: ${meta.name}`);
+    bot._client.on('writePacket', (name, params) => {
+      console.log(`Outgoing Packet Name: ${name}`);
     });
   } else {
     bot.on('inject_allowed', () => {
-      bot._client.on('packet', (data, meta) => {
-        console.log(`Outgoing/Incoming Packet Name: ${meta.name}`);
+      bot._client.on('writePacket', (name, params) => {
+        console.log(`Outgoing Packet Name: ${name}`);
       });
     });
   }
