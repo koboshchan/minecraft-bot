@@ -87,12 +87,12 @@ function createSortCommandController(options) {
         if (current !== beforeSignature) {
           end({ changed: true, source: 'inventory-change' });
         }
-      }, 25);
+      }, 50);
 
       // Short cap: avoid hanging forever on servers that never fire toss callback.
       const timeout = setTimeout(() => {
         end({ changed: false, source: 'timeout' });
-      }, 350);
+      }, 500);
     });
   }
 
@@ -513,6 +513,9 @@ function createSortCommandController(options) {
                 stagnantForType = 0;
                 tossedInCycle += 1;
                 totalTossed += 1;
+                
+                // Add a network queue cooldown delay between inventory movements to prevent Folia packet spam
+                await sleep(100);
               }
             } catch (error) {
               console.warn(`[${bot.username}] sort toss failed: ${error.message}`);
@@ -532,11 +535,12 @@ function createSortCommandController(options) {
 
       if (state.pending && state.enabled) {
         state.pending = false;
-        setImmediate(() => {
+        // Schedule next pass with a small delay to sync with tick rate and avoid fast loop packet spam
+        setTimeout(() => {
           runSortPass(bot, state).catch((error) => {
             console.warn(`[${bot.username}] sort pass failed: ${error.message}`);
           });
-        });
+        }, 100);
       }
     }
   }
