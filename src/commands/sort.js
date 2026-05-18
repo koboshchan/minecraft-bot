@@ -453,7 +453,7 @@ function createSortCommandController(options) {
           const needsTurn = target.entity.id !== lastFrameEntityId;
           if (needsTurn) {
             await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
-            await sleep(50); // wait 1 tick before throwing after turn
+            await sleep(150); // wait 3 ticks before throwing after turn
           }
           lastFrameEntityId = target.entity.id;
 
