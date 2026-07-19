@@ -412,7 +412,7 @@ function createSortCommandController(options) {
     state.running = true;
 
     try {
-      const frames = getNearbyItemFrames(bot);
+      const frames = state.frameCache || [];
       debugLog(`sort pass ${bot.username}: frames=${frames.length}`);
       if (frames.length === 0) {
         state.noFramePasses = (state.noFramePasses || 0) + 1;
@@ -493,7 +493,7 @@ function createSortCommandController(options) {
                 totalTossed += 1;
                 
                 // Add a network queue cooldown delay between inventory movements to prevent Folia packet spam
-                await sleep(25);
+                await sleep(50);
               }
             } catch (error) {
               console.warn(`[${bot.username}] sort toss failed: ${error.message}`);
@@ -539,6 +539,15 @@ function createSortCommandController(options) {
     });
   }
 
+  function refreshItemFrameCache(bot, state) {
+    if (!state.enabled) {
+      return;
+    }
+
+    state.frameCache = getNearbyItemFrames(bot);
+    debugLog(`sort cache refresh ${bot.username}: frames=${state.frameCache.length}`);
+  }
+
   function disableSorter(botName) {
     const state = sorterStates.get(botName);
     if (!state) {
@@ -550,6 +559,10 @@ function createSortCommandController(options) {
 
     if (state.interval) {
       clearInterval(state.interval);
+    }
+
+    if (state.cacheInterval) {
+      clearInterval(state.cacheInterval);
     }
 
     if (state.onCollect) {
@@ -585,10 +598,13 @@ function createSortCommandController(options) {
       running: false,
       pending: false,
       noFramePasses: 0,
+      frameCache: [],
       interval: null,
+      cacheInterval: null,
       onCollect: null
     };
 
+    let lastCollectSortTime = 0;
     state.onCollect = (...args) => {
       const collector = args[0];
       if (!state.enabled) {
@@ -599,12 +615,25 @@ function createSortCommandController(options) {
         return;
       }
 
+      const now = Date.now();
+      if (now - lastCollectSortTime < 3000) {
+        return;
+      }
+      lastCollectSortTime = now;
+
       scheduleSortPass(bot, state);
     };
 
     bot.on('playerCollect', state.onCollect);
 
-    // 20 ticks ~= 1 second at 20 TPS.
+    refreshItemFrameCache(bot, state);
+
+    // 200 ticks ~= 10 seconds at 20 TPS.
+    state.cacheInterval = setInterval(() => {
+      refreshItemFrameCache(bot, state);
+    }, 10000);
+
+    // Keep sort pass cadence unchanged; frame detection is handled by cache refresh.
     state.interval = setInterval(() => {
       scheduleSortPass(bot, state);
     }, 1000);

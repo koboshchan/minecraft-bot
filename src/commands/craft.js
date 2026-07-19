@@ -139,19 +139,23 @@ function createCraftCommandController(options) {
     return bot.findBlock({ matching: tableBlock.id, maxDistance });
   }
 
-  function getItemFramesNearPosition(bot, pos, radius = 4) {
+  function getItemFramesNearBot(bot, maxDistance = 12) {
     const frames = [];
+
+    if (!bot.entity || !bot.entity.position) {
+      return frames;
+    }
+
     for (const entity of Object.values(bot.entities)) {
       if (!entity || !entity.position) continue;
       if (!isItemFrameEntity(bot, entity)) continue;
-      const dx = entity.position.x - pos.x;
-      const dy = entity.position.y - pos.y;
-      const dz = entity.position.z - pos.z;
-      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (distance > radius) continue;
+
+      const distance = bot.entity.position.distanceTo(entity.position);
+      if (distance > maxDistance) continue;
+
       const itemData = readItemFrameItemData(bot, entity);
       if (!itemData || (!itemData.itemName && !Number.isFinite(itemData.itemId))) {
-        debugLog(`craft frame near table but item unreadable`, {
+        debugLog(`craft frame near bot but item unreadable`, {
           bot: bot.username,
           entityId: entity.id,
           type: entity.type,
@@ -159,6 +163,7 @@ function createCraftCommandController(options) {
         });
         continue;
       }
+
       frames.push({
         entity,
         itemName: itemData.itemName ? normalizeItemName(itemData.itemName) : null,
@@ -166,6 +171,7 @@ function createCraftCommandController(options) {
         distance
       });
     }
+
     frames.sort((a, b) => a.distance - b.distance);
     return frames;
   }
@@ -225,13 +231,11 @@ function createCraftCommandController(options) {
 
       debugLog(`craft pass ${bot.username}: crafting table at ${craftingTable.position}`);
 
-      const frames = getItemFramesNearPosition(bot, craftingTable.position);
-      if (frames.length === 0) {
-        debugLog(`craft pass ${bot.username}: no item frames near crafting table`);
+      const targetFrame = state.frameCache?.[0] || null;
+      if (!targetFrame) {
+        debugLog(`craft pass ${bot.username}: no readable item frame close to bot`);
         return;
       }
-
-      const targetFrame = frames[0];
       const targetItemId = resolveFrameItemId(bot, targetFrame);
 
       if (targetItemId === null) {
@@ -308,6 +312,15 @@ function createCraftCommandController(options) {
     });
   }
 
+  function refreshCraftItemFrameCache(bot, state) {
+    if (!state.enabled) {
+      return;
+    }
+
+    state.frameCache = getItemFramesNearBot(bot);
+    debugLog(`craft cache refresh ${bot.username}: frames=${state.frameCache.length}`);
+  }
+
   function enableCrafter(botName) {
     if (craftStates.has(botName)) {
       return { ok: false, message: `Crafter already enabled for ${botName}` };
@@ -318,9 +331,15 @@ function createCraftCommandController(options) {
       return { ok: false, message: `Bot ${botName} not found` };
     }
 
-    const state = { enabled: true, running: false, bot };
+    const state = { enabled: true, running: false, bot, frameCache: [], cacheInterval: null };
 
-    const interval = setInterval(() => scheduleCraftPass(bot, state), 150);
+    refreshCraftItemFrameCache(bot, state);
+
+    // 200 ticks ~= 10 seconds at 20 TPS.
+    state.cacheInterval = setInterval(() => refreshCraftItemFrameCache(bot, state), 10000);
+
+    // 200 ticks ~= 10 seconds at 20 TPS.
+    const interval = setInterval(() => scheduleCraftPass(bot, state), 10000);
     state.interval = interval;
 
     craftStates.set(botName, state);
@@ -337,6 +356,7 @@ function createCraftCommandController(options) {
 
     state.enabled = false;
     if (state.interval) clearInterval(state.interval);
+    if (state.cacheInterval) clearInterval(state.cacheInterval);
     craftStates.delete(botName);
     debugLog(`craft disabled for ${botName}`);
     return true;

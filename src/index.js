@@ -3,14 +3,7 @@ require('dotenv').config();
 const crypto = require('crypto');
 const mineflayer = require('mineflayer');
 const createBotCommandManager = require('./commands/bot');
-const handleSayCommand = require('./commands/say');
-const createSortCommandController = require('./commands/sort');
 const createSaveLoadController = require('./commands/save');
-const createCraftCommandController = require('./commands/craft');
-const createDropCommandController = require('./commands/drop');
-const createEventReactorController = require('./commands/eventreactor');
-const createStatusCommandController = require('./commands/status');
-const injectCraftPlugin = require('./plugins/craft');
 
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
@@ -39,22 +32,12 @@ if (ADMIN_SET.size === 0) {
   process.exit(1);
 }
 
-let sortCommands = null;
-let craftCommands = null;
-let dropCommands = null;
-let eventReactorCommands = null;
-let statusCommands = null;
-
 function debugLog(message, extra) {
-  if (!DEBUG) {
-    return;
-  }
-
+  if (!DEBUG) return;
   if (typeof extra === 'undefined') {
     console.log(`[debug] ${message}`);
     return;
   }
-
   console.log(`[debug] ${message}`, extra);
 }
 
@@ -62,7 +45,6 @@ function parseServerAddress(serverAddress) {
   const [host, portRaw] = serverAddress.split(':');
   const parsedPort = Number(portRaw);
   const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 25565;
-
   return { host, port };
 }
 
@@ -82,10 +64,7 @@ function whisperFrom(bot, username, message) {
 function getCompletionStrings(matches) {
   return (matches || [])
     .map((item) => {
-      if (typeof item === 'string') {
-        return item;
-      }
-
+      if (typeof item === 'string') return item;
       return item.match || item.text || item.command || '';
     })
     .map((value) => String(value).trim().replace(/^\//, '').toLowerCase())
@@ -99,17 +78,13 @@ function tabComplete(bot, value) {
         reject(error);
         return;
       }
-
       resolve(matches || []);
     }, false, true);
   });
 }
 
 function formatReason(reason) {
-  if (typeof reason === 'string') {
-    return reason;
-  }
-
+  if (typeof reason === 'string') return reason;
   try {
     return JSON.stringify(reason);
   } catch (_) {
@@ -130,10 +105,8 @@ async function waitForWorldReady(bot) {
     if (isPlayState && hasWorld && hasEntity) {
       return true;
     }
-
     await sleep(250);
   }
-
   return false;
 }
 
@@ -143,14 +116,12 @@ function sendAuthCommands(bot, password) {
       debugLog(`auth-skip ${bot.username}: client not in play state before /register`);
       return;
     }
-
     bot.chat(`/register ${password}`);
     setTimeout(() => {
       if (bot._client?.state !== 'play') {
         debugLog(`auth-skip ${bot.username}: client not in play state before /login`);
         return;
       }
-
       bot.chat(`/login ${password}`);
     }, Math.max(0, AUTH_LOGIN_DELAY_MS));
   }, Math.max(0, AUTH_INITIAL_DELAY_MS));
@@ -162,24 +133,15 @@ function attachAutoAuthFlow(bot, serverIp) {
   let authTimer = null;
 
   async function runAuthAttempt(triggerReason) {
-    if (ended || authSent) {
-      return;
-    }
+    if (ended || authSent) return;
 
     try {
       const worldReady = await waitForWorldReady(bot);
-      if (ended || authSent) {
-        return;
-      }
+      if (ended || authSent) return;
 
       debugLog(`auth-ready ${bot.username}: worldReady=${worldReady} trigger=${triggerReason}`);
-
-      // World can report ready during proxy transitions; wait an extra 5 seconds
-      // after readiness before issuing auth commands.
       await sleep(AUTH_WORLD_READY_WAIT_MS);
-      if (ended || authSent) {
-        return;
-      }
+      if (ended || authSent) return;
 
       if (bot._client?.state !== 'play') {
         debugLog(`auth-skip ${bot.username}: client left play state after readiness wait`);
@@ -201,9 +163,7 @@ function attachAutoAuthFlow(bot, serverIp) {
 
       debugLog(`auth-check ${bot.username}: register=${hasRegister} login=${hasLogin}`);
 
-      if (!hasRegister || !hasLogin) {
-        return;
-      }
+      if (!hasRegister || !hasLogin) return;
 
       const password = derivePassword(bot.username, serverIp);
       debugLog(`auth-run ${bot.username}: issuing /register then /login`);
@@ -215,10 +175,7 @@ function attachAutoAuthFlow(bot, serverIp) {
   }
 
   function scheduleAuthAttempt(triggerReason) {
-    if (ended || authSent) {
-      return;
-    }
-
+    if (ended || authSent) return;
     if (authTimer) {
       debugLog(`auth-schedule skip ${bot.username}: already scheduled trigger=${triggerReason}`);
       return;
@@ -258,8 +215,6 @@ function createBot(botName, serverConfig) {
     physicsEnabled: false
   });
 
-  injectCraftPlugin(bot);
-
   attachAutoAuthFlow(bot, SERVER_IP);
 
   bot.on('login', () => {
@@ -270,15 +225,6 @@ function createBot(botName, serverConfig) {
 
   bot.on('end', () => {
     const displayName = bot.username || botName;
-    if (sortCommands) {
-      sortCommands.disableSorter(botName);
-    }
-    if (craftCommands) {
-      craftCommands.disableCrafter(botName);
-    }
-    if (eventReactorCommands) {
-      eventReactorCommands.disableEventReactor(botName);
-    }
     console.log(`[${displayName}] disconnected`);
     debugLog(`event end ${displayName}`);
   });
@@ -298,55 +244,54 @@ function createBot(botName, serverConfig) {
   return bot;
 }
 
+// Track sub-bot features in the main thread for save/load commands
+const botStates = new Map();
+
 const botCommands = createBotCommandManager({
-  createBot,
-  debugLog,
-  onBeforeRemove: (botName) => {
-    if (sortCommands) {
-      sortCommands.disableSorter(botName);
-    }
-    if (craftCommands) {
-      craftCommands.disableCrafter(botName);
-    }
-    if (eventReactorCommands) {
-      eventReactorCommands.disableEventReactor(botName);
-    }
+  onBeforeRemove: () => {},
+  botStates,
+  debugLog
+});
+
+// Mocks for saveLoadCommands so save.js continues to work unchanged
+const sortCommands = {
+  isSorterEnabled: (name) => botStates.get(name)?.sorterEnabled || false,
+  handleSortCommand: (parts) => {
+    const name = parts[0];
+    const mode = parts[1];
+    const state = botStates.get(name) || { sorterEnabled: false, crafterEnabled: false, eventReactorEnabled: false };
+    state.sorterEnabled = (mode === 'enable');
+    botStates.set(name, state);
+    botCommands.sendCommandToWorker(name, 'sort', parts).catch(() => {});
+    return `Sorter status updated for ${name}`;
   }
-});
+};
 
-sortCommands = createSortCommandController({
-  getManagedBot: botCommands.getManagedBot,
-  hasManagedBot: botCommands.hasManagedBot,
-  debugLog
-});
+const craftCommands = {
+  isCrafterEnabled: (name) => botStates.get(name)?.crafterEnabled || false,
+  handleCraftCommand: (parts) => {
+    const name = parts[0];
+    const mode = parts[1];
+    const state = botStates.get(name) || { sorterEnabled: false, crafterEnabled: false, eventReactorEnabled: false };
+    state.crafterEnabled = (mode === 'enable');
+    botStates.set(name, state);
+    botCommands.sendCommandToWorker(name, 'craft', parts).catch(() => {});
+    return `Crafter status updated for ${name}`;
+  }
+};
 
-craftCommands = createCraftCommandController({
-  getManagedBot: botCommands.getManagedBot,
-  hasManagedBot: botCommands.hasManagedBot,
-  debugLog
-});
-
-dropCommands = createDropCommandController({
-  getManagedBot: botCommands.getManagedBot,
-  hasManagedBot: botCommands.hasManagedBot,
-  debugLog
-});
-
-eventReactorCommands = createEventReactorController({
-    getManagedBot: botCommands.getManagedBot,
-    hasManagedBot: botCommands.hasManagedBot,
-    sortCommands,
-    craftCommands,
-    debugLog
-  });
-
-  statusCommands = createStatusCommandController({
-    getManagedBot: botCommands.getManagedBot,
-    hasManagedBot: botCommands.hasManagedBot,
-    sortCommands,
-    craftCommands,
-    eventReactorCommands
-  });
+const eventReactorCommands = {
+  isEventReactorEnabled: (name) => botStates.get(name)?.eventReactorEnabled || false,
+  handleEventReactorCommand: (parts) => {
+    const name = parts[0];
+    const mode = parts[1];
+    const state = botStates.get(name) || { sorterEnabled: false, crafterEnabled: false, eventReactorEnabled: false };
+    state.eventReactorEnabled = (mode === 'enable');
+    botStates.set(name, state);
+    botCommands.sendCommandToWorker(name, 'eventreactor', parts).catch(() => {});
+    return `EventReactor status updated for ${name}`;
+  }
+};
 
 const saveLoadCommands = createSaveLoadController({
   botCommands,
@@ -358,15 +303,11 @@ const saveLoadCommands = createSaveLoadController({
 });
 
 function parseControlCommand(message) {
-  if (!message.startsWith(COMMAND_PREFIX)) {
-    return null;
-  }
+  if (!message.startsWith(COMMAND_PREFIX)) return null;
 
   const trimmed = message.trim();
   const body = trimmed.slice(COMMAND_PREFIX.length).trim();
-  if (!body) {
-    return null;
-  }
+  if (!body) return null;
 
   const parts = body.split(/\s+/);
   const command = (parts.shift() || '').toLowerCase();
@@ -386,19 +327,12 @@ function main() {
   let reconnectTimer = null;
   let commandCenter = null;
 
-  function handleControlChat(username, message) {
-    if (!commandCenter) {
-      return;
-    }
-
-    if (username === commandCenter.username) {
-      return;
-    }
+  async function handleControlChat(username, message) {
+    if (!commandCenter) return;
+    if (username === commandCenter.username) return;
 
     const parsed = parseControlCommand(message);
-    if (!parsed) {
-      return;
-    }
+    if (!parsed) return;
 
     debugLog(`command-received from ${username}: ${message}`);
 
@@ -412,31 +346,23 @@ function main() {
 
     if (parsed.command === 'bot') {
       result = botCommands.handleBotCommand(parsed.parts, { serverConfig });
-    } else if (parsed.command === 'say') {
-      result = handleSayCommand(parsed.parts, {
-        getManagedBot: botCommands.getManagedBot,
-        debugLog
-      });
-    } else if (parsed.command === 'sort') {
-      result = sortCommands.handleSortCommand(parsed.parts);
     } else if (parsed.command === 'save') {
       result = saveLoadCommands.handleSaveCommand(parsed.parts);
     } else if (parsed.command === 'load') {
       result = saveLoadCommands.handleLoadCommand(parsed.parts);
-    } else if (parsed.command === 'status') {
-      result = statusCommands.handleStatusCommand(parsed.parts);
-    } else if (parsed.command === 'craft') {
-      result = craftCommands.handleCraftCommand(parsed.parts);
-    } else if (parsed.command === 'drop') {
-      result = dropCommands.handleDropCommand(parsed.parts);
-    } else if (parsed.command === 'eventreactor' || parsed.command === 'er') {
-      result = eventReactorCommands.handleEventReactorCommand(parsed.parts);
     } else {
-      result = 'Unknown command';
+      // It's a sub-bot command! Route it to the corresponding worker thread
+      const targetBotName = parsed.parts[0];
+      if (!targetBotName) {
+        result = `Usage: +${parsed.command} <botname> [args]`;
+      } else if (!botCommands.hasManagedBot(targetBotName)) {
+        result = `Bot ${targetBotName} does not exist`;
+      } else {
+        result = await botCommands.sendCommandToWorker(targetBotName, parsed.command, parsed.parts);
+      }
     }
 
     debugLog(`command-result for ${username}: ${result}`);
-
     whisperFrom(commandCenter, username, result);
   }
 
@@ -445,13 +371,8 @@ function main() {
     commandCenter.on('chat', handleControlChat);
 
     commandCenter.on('end', () => {
-      if (shuttingDown) {
-        return;
-      }
-
-      if (reconnectTimer) {
-        return;
-      }
+      if (shuttingDown) return;
+      if (reconnectTimer) return;
 
       debugLog(`command-center reconnect scheduled in ${RECONNECT_DELAY_MS}ms`);
       reconnectTimer = setTimeout(() => {
@@ -470,13 +391,11 @@ function main() {
       reconnectTimer = null;
     }
 
-    debugLog('received SIGINT, shutting down bots and sorters');
-    sortCommands.disableAllSorters();
-    craftCommands.disableAllCrafters();
-    eventReactorCommands.disableAllEventReactors();
-
-    botCommands.forEachManagedBot((bot) => {
-      bot.end('Shutting down');
+    debugLog('received SIGINT, shutting down bots');
+    botCommands.forEachManagedBot((worker) => {
+      try {
+        worker.postMessage({ type: 'shutdown' });
+      } catch (_) {}
     });
 
     if (commandCenter) {

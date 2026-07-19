@@ -35,55 +35,15 @@ function injectCraftPlugin(bot) {
     return windowCraftingTable;
   }
 
-  async function craft(recipe, count, craftingTable) {
-    assert.ok(recipe);
-    count = parseInt(count ?? 1, 10);
-    if (recipe.requiresTable && !craftingTable) {
-      throw new Error(`Recipe requires craftingTable, but one was not supplied: ${JSON.stringify(recipe)}`);
-    }
-
-    try {
-      for (let index = 0; index < count; index += 1) {
-        await craftOnce(recipe, craftingTable);
-      }
-    } catch (err) {
-      closeCraftingWindow();
-      throw new Error(err);
-    }
-
-    closeCraftingWindow();
-  }
-
-  async function craftStack(recipe, count, craftingTable) {
-    assert.ok(recipe);
-    count = parseInt(count ?? 1, 10);
-    if (recipe.requiresTable && !craftingTable) {
-      throw new Error(`Recipe requires craftingTable, but one was not supplied: ${JSON.stringify(recipe)}`);
-    }
-
-    try {
-      let remaining = count;
-      while (remaining > 0) {
-        const batchCount = Math.min(remaining, getMaxBatchCount(recipe));
-        if (batchCount <= 0) {
-          throw new Error('invalid craft stack batch size');
-        }
-        await craftStackOnce(recipe, batchCount, craftingTable);
-        remaining -= batchCount;
-      }
-    } catch (err) {
-      closeCraftingWindow();
-      throw new Error(err);
-    }
-
-    closeCraftingWindow();
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async function craftStackDrop(recipe, count, craftingTable) {
     assert.ok(recipe);
     count = parseInt(count ?? 1, 10);
     if (recipe.requiresTable && !craftingTable) {
-      throw new Error(`Recipe requires craftingTable, but one was not supplied: ${JSON.stringify(recipe)}`);
+      throw new Error(`Recipe requires craftingTable, but one was not supplied`);
     }
 
     try {
@@ -96,463 +56,138 @@ function injectCraftPlugin(bot) {
         await craftStackDropOnce(recipe, batchCount, craftingTable);
         remaining -= batchCount;
       }
-    } catch (err) {
+    } finally {
       closeCraftingWindow();
-      throw new Error(err);
-    }
-
-    closeCraftingWindow();
-  }
-
-  async function craftOnce(recipe, craftingTable) {
-    const window = await getCraftWindow(craftingTable);
-    await startClicking(window, craftingTable ? 3 : 2, craftingTable ? 3 : 2);
-
-    async function startClicking(window, width, height) {
-      const extraSlots = unusedRecipeSlots();
-      let ingredientIndex = 0;
-      let originalSourceSlot = null;
-      let iterator;
-
-      if (recipe.inShape) {
-        iterator = {
-          x: 0,
-          y: 0,
-          row: recipe.inShape[0]
-        };
-        await clickShape();
-      } else {
-        await nextIngredientsClick();
-      }
-
-      function incrementShapeIterator() {
-        iterator.x += 1;
-        if (iterator.x >= iterator.row.length) {
-          iterator.y += 1;
-          if (iterator.y >= recipe.inShape.length) return null;
-          iterator.x = 0;
-          iterator.row = recipe.inShape[iterator.y];
-        }
-        return iterator;
-      }
-
-      async function nextShapeClick() {
-        if (incrementShapeIterator()) {
-          await clickShape();
-        } else if (!recipe.ingredients) {
-          await putMaterialsAway();
-        } else {
-          await nextIngredientsClick();
-        }
-      }
-
-      async function clickShape() {
-        const destinationSlot = slot(iterator.x, iterator.y);
-        const ingredient = iterator.row[iterator.x];
-        if (ingredient.id === -1) return nextShapeClick();
-        if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
-          (ingredient.metadata != null && window.selectedItem.metadata !== ingredient.metadata)) {
-          const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata);
-          if (!sourceItem) throw new Error('missing ingredient');
-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot;
-          await bot.clickWindow(sourceItem.slot, 0, 0);
-        }
-        await bot.clickWindow(destinationSlot, 1, 0);
-        await nextShapeClick();
-      }
-
-      async function nextIngredientsClick() {
-        const ingredient = recipe.ingredients[ingredientIndex];
-        const destinationSlot = extraSlots.pop();
-        if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
-          (ingredient.metadata != null && window.selectedItem.metadata !== ingredient.metadata)) {
-          const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata);
-          if (!sourceItem) throw new Error('missing ingredient');
-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot;
-          await bot.clickWindow(sourceItem.slot, 0, 0);
-        }
-        await bot.clickWindow(destinationSlot, 1, 0);
-        ingredientIndex += 1;
-        if (ingredientIndex < recipe.ingredients.length) {
-          await nextIngredientsClick();
-        } else {
-          await putMaterialsAway();
-        }
-      }
-
-      async function putMaterialsAway() {
-        const start = window.inventoryStart;
-        const end = window.inventoryEnd;
-        await bot.putSelectedItemRange(start, end, window, originalSourceSlot);
-        await grabResult();
-      }
-
-      async function grabResult() {
-        assert.strictEqual(window.selectedItem, null);
-        const item = new Item(recipe.result.id, recipe.result.count, recipe.result.metadata);
-        window.updateSlot(0, item);
-        await bot.putAway(0);
-        await updateOutShape();
-      }
-
-      async function updateOutShape() {
-        if (!recipe.outShape) {
-          for (let slotIndex = 1; slotIndex <= width * height; slotIndex += 1) {
-            window.updateSlot(slotIndex, null);
-          }
-          return;
-        }
-
-        const slotsToClick = [];
-        for (let y = 0; y < recipe.outShape.length; y += 1) {
-          const row = recipe.outShape[y];
-          for (let x = 0; x < row.length; x += 1) {
-            const resultSlot = slot(x, y);
-            let item = null;
-            if (row[x].id !== -1) {
-              item = new Item(row[x].id, row[x].count, row[x].metadata || null);
-              slotsToClick.push(resultSlot);
-            }
-            window.updateSlot(resultSlot, item);
-          }
-        }
-
-        for (const resultSlot of slotsToClick) {
-          await bot.putAway(resultSlot);
-        }
-      }
-
-      function slot(x, y) {
-        return 1 + x + width * y;
-      }
-
-      function unusedRecipeSlots() {
-        const result = [];
-        let x;
-        let y;
-        let row;
-        if (recipe.inShape) {
-          for (y = 0; y < recipe.inShape.length; y += 1) {
-            row = recipe.inShape[y];
-            for (x = 0; x < row.length; x += 1) {
-              if (row[x].id === -1) result.push(slot(x, y));
-            }
-            for (; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-          for (; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        } else {
-          for (y = 0; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        }
-        return result;
-      }
-    }
-  }
-
-  async function craftStackOnce(recipe, count, craftingTable) {
-    const window = await getCraftWindow(craftingTable);
-    await startClicking(window, craftingTable ? 3 : 2, craftingTable ? 3 : 2);
-
-    async function startClicking(window, width, height) {
-      const extraSlots = unusedRecipeSlots();
-      let ingredientIndex = 0;
-      let originalSourceSlot = null;
-      let iterator;
-
-      if (recipe.inShape) {
-        iterator = {
-          x: 0,
-          y: 0,
-          row: recipe.inShape[0]
-        };
-        await clickShape();
-      } else {
-        await nextIngredientsClick();
-      }
-
-      function incrementShapeIterator() {
-        iterator.x += 1;
-        if (iterator.x >= iterator.row.length) {
-          iterator.y += 1;
-          if (iterator.y >= recipe.inShape.length) return null;
-          iterator.x = 0;
-          iterator.row = recipe.inShape[iterator.y];
-        }
-        return iterator;
-      }
-
-      async function nextShapeClick() {
-        if (incrementShapeIterator()) {
-          await clickShape();
-        } else if (!recipe.ingredients) {
-          await putMaterialsAway();
-        } else {
-          await nextIngredientsClick();
-        }
-      }
-
-      async function ensureSelectedIngredient(ingredient) {
-        if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
-          (ingredient.metadata != null && window.selectedItem.metadata !== ingredient.metadata)) {
-          const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata);
-          if (!sourceItem) throw new Error('missing ingredient');
-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot;
-          await bot.clickWindow(sourceItem.slot, 0, 0);
-        }
-      }
-
-      async function placeIngredientCount(destinationSlot, ingredient) {
-        const perCraftCount = ingredient.count ?? 1;
-        let remaining = count * perCraftCount;
-        while (remaining > 0) {
-          await ensureSelectedIngredient(ingredient);
-          const heldCount = window.selectedItem?.count || 0;
-          if (heldCount <= 0) throw new Error('missing ingredient');
-
-          const placements = Math.min(remaining, heldCount);
-          if (placements === heldCount) {
-            await bot.clickWindow(destinationSlot, 0, 0);
-          } else if (Math.floor(heldCount / 2) === placements) {
-            await bot.clickWindow(destinationSlot, 0, 0); // left click places all
-            await bot.clickWindow(destinationSlot, 1, 0); // right click picks up half
-          } else {
-            for (let placement = 0; placement < placements; placement += 1) {
-              await bot.clickWindow(destinationSlot, 1, 0);
-            }
-          }
-
-          remaining -= placements;
-        }
-      }
-
-      async function clickShape() {
-        const destinationSlot = slot(iterator.x, iterator.y);
-        const ingredient = iterator.row[iterator.x];
-        if (ingredient.id === -1) return nextShapeClick();
-        await placeIngredientCount(destinationSlot, ingredient);
-        await nextShapeClick();
-      }
-
-      async function nextIngredientsClick() {
-        const ingredient = recipe.ingredients[ingredientIndex];
-        const destinationSlot = extraSlots.pop();
-        await placeIngredientCount(destinationSlot, ingredient);
-        ingredientIndex += 1;
-        if (ingredientIndex < recipe.ingredients.length) {
-          await nextIngredientsClick();
-        } else {
-          await putMaterialsAway();
-        }
-      }
-
-      async function putMaterialsAway() {
-        const start = window.inventoryStart;
-        const end = window.inventoryEnd;
-        await bot.putSelectedItemRange(start, end, window, originalSourceSlot);
-        await grabResult();
-      }
-
-      async function grabResult() {
-        assert.strictEqual(window.selectedItem, null);
-        const item = new Item(recipe.result.id, recipe.result.count, recipe.result.metadata);
-        window.updateSlot(0, item);
-        await bot.clickWindow(0, 0, 1);
-      }
-
-      function slot(x, y) {
-        return 1 + x + width * y;
-      }
-
-      function unusedRecipeSlots() {
-        const result = [];
-        let x;
-        let y;
-        let row;
-        if (recipe.inShape) {
-          for (y = 0; y < recipe.inShape.length; y += 1) {
-            row = recipe.inShape[y];
-            for (x = 0; x < row.length; x += 1) {
-              if (row[x].id === -1) result.push(slot(x, y));
-            }
-            for (; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-          for (; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        } else {
-          for (y = 0; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        }
-        return result;
-      }
     }
   }
 
   async function craftStackDropOnce(recipe, count, craftingTable) {
     const window = await getCraftWindow(craftingTable);
-    await startClicking(window, craftingTable ? 3 : 2, craftingTable ? 3 : 2);
+    const width = craftingTable ? 3 : 2;
 
-    async function startClicking(window, width, height) {
-      const extraSlots = unusedRecipeSlots();
-      let ingredientIndex = 0;
-      let originalSourceSlot = null;
-      let iterator;
+    const debugLog = (msg) => {
+      bot.emit('debug', `[craft-plugin] ${msg}`);
+    };
 
-      if (recipe.inShape) {
-        iterator = {
-          x: 0,
-          y: 0,
-          row: recipe.inShape[0]
-        };
-        await clickShape();
-      } else {
-        await nextIngredientsClick();
-      }
-
-      function incrementShapeIterator() {
-        iterator.x += 1;
-        if (iterator.x >= iterator.row.length) {
-          iterator.y += 1;
-          if (iterator.y >= recipe.inShape.length) return null;
-          iterator.x = 0;
-          iterator.row = recipe.inShape[iterator.y];
+    // 1. Identify valid recipe ingredients to protect them
+    const ingredientIds = new Set();
+    if (recipe.delta) {
+      recipe.delta.forEach((d) => {
+        if (d.count < 0) {
+          ingredientIds.add(d.id);
         }
-        return iterator;
-      }
+      });
+    }
 
-      async function nextShapeClick() {
-        if (incrementShapeIterator()) {
-          await clickShape();
-        } else if (!recipe.ingredients) {
-          await putMaterialsAway();
-        } else {
-          await nextIngredientsClick();
+    // 2. Garbage Disposal: toss all non-ingredient items in the inventory
+    for (const item of window.items()) {
+      if (item && item.slot >= window.inventoryStart && item.slot < window.inventoryEnd) {
+        if (!ingredientIds.has(item.type)) {
+          debugLog(`tossing garbage item ${item.name} from slot ${item.slot}`);
+          await bot.clickWindow(item.slot, 1, 4); // drop full stack
+          await sleep(50);
         }
-      }
-
-      async function ensureSelectedIngredient(ingredient) {
-        if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
-          (ingredient.metadata != null && window.selectedItem.metadata !== ingredient.metadata)) {
-          const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata);
-          if (!sourceItem) throw new Error('missing ingredient');
-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot;
-          await bot.clickWindow(sourceItem.slot, 0, 0);
-        }
-      }
-
-      async function placeIngredientCount(destinationSlot, ingredient) {
-        const perCraftCount = ingredient.count ?? 1;
-        let remaining = count * perCraftCount;
-        while (remaining > 0) {
-          await ensureSelectedIngredient(ingredient);
-          const heldCount = window.selectedItem?.count || 0;
-          if (heldCount <= 0) throw new Error('missing ingredient');
-
-          const placements = Math.min(remaining, heldCount);
-          if (placements === heldCount) {
-            await bot.clickWindow(destinationSlot, 0, 0);
-          } else if (Math.floor(heldCount / 2) === placements) {
-            await bot.clickWindow(destinationSlot, 0, 0); // left click places all
-            await bot.clickWindow(destinationSlot, 1, 0); // right click picks up half
-          } else {
-            for (let placement = 0; placement < placements; placement += 1) {
-              await bot.clickWindow(destinationSlot, 1, 0);
-            }
-          }
-
-          remaining -= placements;
-        }
-      }
-
-      async function clickShape() {
-        const destinationSlot = slot(iterator.x, iterator.y);
-        const ingredient = iterator.row[iterator.x];
-        if (ingredient.id === -1) return nextShapeClick();
-        await placeIngredientCount(destinationSlot, ingredient);
-        await nextShapeClick();
-      }
-
-      async function nextIngredientsClick() {
-        const ingredient = recipe.ingredients[ingredientIndex];
-        const destinationSlot = extraSlots.pop();
-        await placeIngredientCount(destinationSlot, ingredient);
-        ingredientIndex += 1;
-        if (ingredientIndex < recipe.ingredients.length) {
-          await nextIngredientsClick();
-        } else {
-          await putMaterialsAway();
-        }
-      }
-
-      async function putMaterialsAway() {
-        const start = window.inventoryStart;
-        const end = window.inventoryEnd;
-        await bot.putSelectedItemRange(start, end, window, originalSourceSlot);
-        await dropResultToGround();
-      }
-
-      async function dropResultToGround() {
-        assert.strictEqual(window.selectedItem, null);
-        const predicted = new Item(recipe.result.id, recipe.result.count, recipe.result.metadata);
-
-        if (!window.slots[0]) {
-          window.updateSlot(0, predicted);
-        }
-
-        // Drop the entire crafted batch instantly
-        await bot.clickWindow(0, 1, 4);
-      }
-
-      function slot(x, y) {
-        return 1 + x + width * y;
-      }
-
-      function unusedRecipeSlots() {
-        const result = [];
-        let x;
-        let y;
-        let row;
-        if (recipe.inShape) {
-          for (y = 0; y < recipe.inShape.length; y += 1) {
-            row = recipe.inShape[y];
-            for (x = 0; x < row.length; x += 1) {
-              if (row[x].id === -1) result.push(slot(x, y));
-            }
-            for (; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-          for (; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        } else {
-          for (y = 0; y < height; y += 1) {
-            for (x = 0; x < width; x += 1) {
-              result.push(slot(x, y));
-            }
-          }
-        }
-        return result;
       }
     }
+
+    // Helper to place item and recover from desyncs
+    async function placeIngredient(destSlot, ingredientId, ingredientMetadata, neededCount) {
+      let remaining = neededCount;
+      while (remaining > 0) {
+        // Ensure correct item is held
+        if (!window.selectedItem || window.selectedItem.type !== ingredientId ||
+            (ingredientMetadata != null && window.selectedItem.metadata !== ingredientMetadata)) {
+          
+          if (window.selectedItem) {
+            debugLog(`holding wrong item ${window.selectedItem.name}, putting away`);
+            await clearSelectedItem();
+          }
+
+          const sourceItem = window.findInventoryItem(ingredientId, ingredientMetadata);
+          if (!sourceItem) {
+            throw new Error(`missing ingredient: type ${ingredientId}`);
+          }
+
+          debugLog(`picking up ingredient type ${ingredientId} from slot ${sourceItem.slot}`);
+          await bot.clickWindow(sourceItem.slot, 0, 0);
+          await sleep(50);
+
+          if (!window.selectedItem || window.selectedItem.type !== ingredientId) {
+            throw new Error(`desync: failed to pick up ingredient type ${ingredientId}`);
+          }
+        }
+
+        const heldCount = window.selectedItem.count;
+        const placements = Math.min(remaining, heldCount);
+
+        debugLog(`placing ${placements} items into slot ${destSlot}`);
+        if (placements === heldCount) {
+          await bot.clickWindow(destSlot, 0, 0);
+        } else {
+          for (let i = 0; i < placements; i++) {
+            await bot.clickWindow(destSlot, 1, 0);
+            await sleep(50);
+          }
+        }
+        await sleep(50);
+        remaining -= placements;
+      }
+    }
+
+    async function clearSelectedItem() {
+      if (window.selectedItem) {
+        try {
+          const emptySlot = window.firstEmptyInventorySlot();
+          if (emptySlot !== null) {
+            await bot.clickWindow(emptySlot, 0, 0);
+          } else {
+            debugLog(`inventory full, dropping leftover item from hand`);
+            await bot.clickWindow(-999, 0, 0); // click outside drops held item
+          }
+          await sleep(50);
+        } catch (e) {
+          debugLog(`failed to clear selected item: ${e.message}`);
+        }
+      }
+    }
+
+    // 3. Build slot requirement map
+    const gridRequirements = new Map();
+
+    if (recipe.inShape) {
+      for (let y = 0; y < recipe.inShape.length; y++) {
+        const row = recipe.inShape[y];
+        for (let x = 0; x < row.length; x++) {
+          const ingredient = row[x];
+          if (ingredient && ingredient.id !== -1) {
+            const destSlot = 1 + x + width * y;
+            gridRequirements.set(destSlot, ingredient);
+          }
+        }
+      }
+    } else if (recipe.ingredients) {
+      let destSlot = 1;
+      for (const ingredient of recipe.ingredients) {
+        if (ingredient && ingredient.id !== -1) {
+          gridRequirements.set(destSlot, ingredient);
+          destSlot++;
+        }
+      }
+    }
+
+    // 4. Place ingredients sequentially
+    for (const [destSlot, ingredient] of gridRequirements.entries()) {
+      const perCraftCount = ingredient.count ?? 1;
+      await placeIngredient(destSlot, ingredient.id, ingredient.metadata || null, count * perCraftCount);
+    }
+
+    // 5. Clear cursor before crafting
+    await clearSelectedItem();
+
+    // 6. Drop the crafted output directly from slot 0
+    debugLog(`dropping crafted output from slot 0`);
+    await bot.clickWindow(0, 1, 4); // mode 4 button 1: drop stack
+    await sleep(50);
   }
 
   function recipesFor(itemType, metadata, minResultCount, craftingTable) {
@@ -601,7 +236,8 @@ function injectCraftPlugin(bot) {
     }
 
     const resultCount = recipe.result?.count ?? 1;
-    maxBatchCount = Math.min(maxBatchCount, Math.floor(32 / resultCount));
+    const resultStackLimit = bot.registry.items[recipe.result.id]?.stackSize ?? 64;
+    maxBatchCount = Math.min(maxBatchCount, Math.floor(resultStackLimit / resultCount));
 
     return Number.isFinite(maxBatchCount) && maxBatchCount > 0 ? maxBatchCount : 1;
   }
@@ -627,8 +263,6 @@ function injectCraftPlugin(bot) {
     return requirements;
   }
 
-  bot.craft = craft;
-  bot.craftStack = craftStack;
   bot.craftStackDrop = craftStackDrop;
   bot.craftStackBatchSize = getMaxBatchCount;
   bot.recipesFor = recipesFor;
