@@ -193,16 +193,42 @@ function injectCraftPlugin(bot) {
       }
     }
 
-    // 4. Place ingredients sequentially
-    for (const [destSlot, ingredient] of gridRequirements.entries()) {
-      const perCraftCount = ingredient.count ?? 1;
-      await placeIngredient(destSlot, ingredient.id, ingredient.metadata || null, count * perCraftCount);
+    // 4. Track available inventory counts and required grid slots per ingredient type
+    const inventoryCounts = new Map();
+    for (const item of window.items()) {
+      if (item && item.slot >= window.inventoryStart && item.slot < window.inventoryEnd) {
+        inventoryCounts.set(item.type, (inventoryCounts.get(item.type) || 0) + item.count);
+      }
     }
 
-    // 5. Clear cursor before crafting
+    const ingredientSlotCounts = new Map();
+    for (const req of gridRequirements.values()) {
+      ingredientSlotCounts.set(req.id, (ingredientSlotCounts.get(req.id) || 0) + 1);
+    }
+
+    // 5. Place ingredients sequentially using adaptive sizing (upgrade to 32 or 64 to save clicks if surplus exists)
+    for (const [destSlot, ingredient] of gridRequirements.entries()) {
+      const perCraftCount = ingredient.count ?? 1;
+      const neededCount = count * perCraftCount;
+      const S = ingredientSlotCounts.get(ingredient.id) || 1;
+      const totalAvailable = inventoryCounts.get(ingredient.id) || 0;
+
+      let placeSize = neededCount;
+      if (neededCount <= 32 && S * 32 <= totalAvailable) {
+        placeSize = 32;
+      }
+      if (neededCount <= 64 && S * 64 <= totalAvailable) {
+        placeSize = 64;
+      }
+
+      await placeIngredient(destSlot, ingredient.id, ingredient.metadata || null, placeSize);
+      inventoryCounts.set(ingredient.id, Math.max(0, totalAvailable - placeSize));
+    }
+
+    // 6. Clear cursor before crafting
     await clearSelectedItem();
 
-    // 6. Drop the crafted output directly from slot 0
+    // 7. Drop the crafted output directly from slot 0
     debugLog(`dropping crafted output from slot 0`);
     await click(0, 1, 4); // mode 4 button 1: drop stack
     await sleep(10);
