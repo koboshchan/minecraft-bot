@@ -267,7 +267,19 @@ function createCraftCommandController(options) {
 
       const stackSize = Math.floor(64 / (recipe.result.count || 1));
       const maxPerPass = 64;
-      const craftCount = Math.min(stackSize, maxPerPass, maxCraftableCount(bot, recipe));
+      let craftCount = Math.min(stackSize, maxPerPass, maxCraftableCount(bot, recipe));
+
+      // Restrict craftCount to powers of 2 to ensure fast, click-optimized placement sizes
+      const allowedCounts = [64, 32, 16, 8, 4, 2, 1];
+      let targetCount = 0;
+      for (const countVal of allowedCounts) {
+        if (countVal <= craftCount) {
+          targetCount = countVal;
+          break;
+        }
+      }
+      craftCount = targetCount;
+
       if (craftCount <= 0) {
         debugLog(`craft pass ${bot.username}: not enough ingredients`);
         return;
