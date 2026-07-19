@@ -46,6 +46,15 @@ function injectCraftPlugin(bot) {
       throw new Error(`Recipe requires craftingTable, but one was not supplied`);
     }
 
+    const startTime = Date.now();
+    let totalClicks = 0;
+
+    const debugLog = (msg) => {
+      bot.emit('craft_debug', msg);
+    };
+
+    debugLog(`Starting craft run for ${count} items...`);
+
     try {
       let remaining = count;
       while (remaining > 0) {
@@ -53,20 +62,25 @@ function injectCraftPlugin(bot) {
         if (batchCount <= 0) {
           throw new Error('invalid craft stack batch size');
         }
-        await craftStackDropOnce(recipe, batchCount, craftingTable);
+        const clicks = await craftStackDropOnce(recipe, batchCount, craftingTable, debugLog);
+        totalClicks += clicks;
         remaining -= batchCount;
       }
+      const elapsed = Date.now() - startTime;
+      debugLog(`Craft run completed successfully in ${elapsed}ms! Total clicks: ${totalClicks}`);
     } finally {
       closeCraftingWindow();
     }
   }
 
-  async function craftStackDropOnce(recipe, count, craftingTable) {
+  async function craftStackDropOnce(recipe, count, craftingTable, debugLog) {
     const window = await getCraftWindow(craftingTable);
     const width = craftingTable ? 3 : 2;
+    let clickCount = 0;
 
-    const debugLog = (msg) => {
-      bot.emit('debug', `[craft-plugin] ${msg}`);
+    const click = async (slot, button, mode) => {
+      clickCount++;
+      await bot.clickWindow(slot, button, mode);
     };
 
     // 1. Identify valid recipe ingredients to protect them
@@ -84,7 +98,7 @@ function injectCraftPlugin(bot) {
       if (item && item.slot >= window.inventoryStart && item.slot < window.inventoryEnd) {
         if (!ingredientIds.has(item.type)) {
           debugLog(`tossing garbage item ${item.name} from slot ${item.slot}`);
-          await bot.clickWindow(item.slot, 1, 4); // drop full stack
+          await click(item.slot, 1, 4); // drop full stack
           await sleep(10);
         }
       }
@@ -109,7 +123,7 @@ function injectCraftPlugin(bot) {
           }
 
           debugLog(`picking up ingredient type ${ingredientId} from slot ${sourceItem.slot}`);
-          await bot.clickWindow(sourceItem.slot, 0, 0);
+          await click(sourceItem.slot, 0, 0);
           await sleep(10);
 
           if (!window.selectedItem || window.selectedItem.type !== ingredientId) {
@@ -122,10 +136,10 @@ function injectCraftPlugin(bot) {
 
         debugLog(`placing ${placements} items into slot ${destSlot}`);
         if (placements === heldCount) {
-          await bot.clickWindow(destSlot, 0, 0);
+          await click(destSlot, 0, 0);
         } else {
           for (let i = 0; i < placements; i++) {
-            await bot.clickWindow(destSlot, 1, 0);
+            await click(destSlot, 1, 0);
             await sleep(10);
           }
         }
@@ -139,10 +153,10 @@ function injectCraftPlugin(bot) {
         try {
           const emptySlot = window.firstEmptyInventorySlot();
           if (emptySlot !== null) {
-            await bot.clickWindow(emptySlot, 0, 0);
+            await click(emptySlot, 0, 0);
           } else {
             debugLog(`inventory full, dropping leftover item from hand`);
-            await bot.clickWindow(-999, 0, 0); // click outside drops held item
+            await click(-999, 0, 0); // click outside drops held item
           }
           await sleep(10);
         } catch (e) {
@@ -186,8 +200,10 @@ function injectCraftPlugin(bot) {
 
     // 6. Drop the crafted output directly from slot 0
     debugLog(`dropping crafted output from slot 0`);
-    await bot.clickWindow(0, 1, 4); // mode 4 button 1: drop stack
+    await click(0, 1, 4); // mode 4 button 1: drop stack
     await sleep(10);
+
+    return clickCount;
   }
 
   function recipesFor(itemType, metadata, minResultCount, craftingTable) {
