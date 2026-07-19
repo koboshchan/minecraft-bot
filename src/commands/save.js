@@ -49,14 +49,14 @@ function createSaveLoadController(options) {
     const name = parts[0];
     const waitMsRaw = parts[1];
     if (!name) {
-      return 'Usage: +load <name> [waitMs]';
+      return 'Usage: +load <name> [delay]';
     }
 
     let waitMs = DEFAULT_LOAD_JOIN_INTERVAL_MS;
     if (typeof waitMsRaw !== 'undefined') {
       const parsed = Number(waitMsRaw);
       if (!Number.isFinite(parsed) || parsed < 0) {
-        return 'Usage: +load <name> [waitMs] (waitMs must be a non-negative number)';
+        return 'Usage: +load <name> [delay] (delay must be a non-negative number)';
       }
 
       waitMs = Math.floor(parsed);
