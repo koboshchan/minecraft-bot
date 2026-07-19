@@ -266,7 +266,7 @@ function createCraftCommandController(options) {
       });
 
       const stackSize = Math.floor(64 / (recipe.result.count || 1));
-      const maxPerPass = 32;
+      const maxPerPass = 64;
       const craftCount = Math.min(stackSize, maxPerPass, maxCraftableCount(bot, recipe));
       if (craftCount <= 0) {
         debugLog(`craft pass ${bot.username}: not enough ingredients`);
