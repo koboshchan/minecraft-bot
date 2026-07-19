@@ -1,4 +1,30 @@
 const { parentPort, workerData } = require('worker_threads');
+
+// Override console methods to prepend timestamps
+const originalLog = console.log;
+const originalError = console.error;
+const originalWarn = console.warn;
+
+function getTimestamp() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const h = pad(now.getHours());
+  const m = pad(now.getMinutes());
+  const s = pad(now.getSeconds());
+  return `[${h}:${m}:${s}]`;
+}
+
+console.log = function (...args) {
+  originalLog(getTimestamp(), ...args);
+};
+
+console.error = function (...args) {
+  originalError(getTimestamp(), ...args);
+};
+
+console.warn = function (...args) {
+  originalWarn(getTimestamp(), ...args);
+};
 const crypto = require('crypto');
 const mineflayer = require('mineflayer');
 const createSortCommandController = require('./commands/sort');

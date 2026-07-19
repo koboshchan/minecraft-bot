@@ -339,7 +339,7 @@ function createCraftCommandController(options) {
     state.cacheInterval = setInterval(() => refreshCraftItemFrameCache(bot, state), 10000);
 
     // 200 ticks ~= 10 seconds at 20 TPS.
-    const interval = setInterval(() => scheduleCraftPass(bot, state), 10000);
+    const interval = setInterval(() => scheduleCraftPass(bot, state), 500);
     state.interval = interval;
 
     craftStates.set(botName, state);
