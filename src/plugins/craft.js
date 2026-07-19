@@ -85,7 +85,7 @@ function injectCraftPlugin(bot) {
         if (!ingredientIds.has(item.type)) {
           debugLog(`tossing garbage item ${item.name} from slot ${item.slot}`);
           await bot.clickWindow(item.slot, 1, 4); // drop full stack
-          await sleep(50);
+          await sleep(10);
         }
       }
     }
@@ -110,7 +110,7 @@ function injectCraftPlugin(bot) {
 
           debugLog(`picking up ingredient type ${ingredientId} from slot ${sourceItem.slot}`);
           await bot.clickWindow(sourceItem.slot, 0, 0);
-          await sleep(50);
+          await sleep(10);
 
           if (!window.selectedItem || window.selectedItem.type !== ingredientId) {
             throw new Error(`desync: failed to pick up ingredient type ${ingredientId}`);
@@ -126,10 +126,10 @@ function injectCraftPlugin(bot) {
         } else {
           for (let i = 0; i < placements; i++) {
             await bot.clickWindow(destSlot, 1, 0);
-            await sleep(50);
+            await sleep(10);
           }
         }
-        await sleep(50);
+        await sleep(10);
         remaining -= placements;
       }
     }
@@ -144,7 +144,7 @@ function injectCraftPlugin(bot) {
             debugLog(`inventory full, dropping leftover item from hand`);
             await bot.clickWindow(-999, 0, 0); // click outside drops held item
           }
-          await sleep(50);
+          await sleep(10);
         } catch (e) {
           debugLog(`failed to clear selected item: ${e.message}`);
         }
@@ -187,7 +187,7 @@ function injectCraftPlugin(bot) {
     // 6. Drop the crafted output directly from slot 0
     debugLog(`dropping crafted output from slot 0`);
     await bot.clickWindow(0, 1, 4); // mode 4 button 1: drop stack
-    await sleep(50);
+    await sleep(10);
   }
 
   function recipesFor(itemType, metadata, minResultCount, craftingTable) {
