@@ -35,7 +35,7 @@ const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
 const SERVER_IP = process.env.SERVER_IP;
 const MINECRAFT_VERSION = process.env.MINECRAFT_VERSION || '1.21';
-const DEBUG = /^(1|true|yes|on)$/i.test(process.env.DEBUG || '');
+const DEBUG = process.env.DEBUG === 'true' || process.env.DEBUG === '1';
 const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
 const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 500);
 const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 800);
