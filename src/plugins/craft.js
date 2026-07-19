@@ -53,7 +53,11 @@ function injectCraftPlugin(bot) {
       bot.emit('craft_debug', msg);
     };
 
-    debugLog(`Starting craft run for ${count} items...`);
+    const infoLog = (msg) => {
+      bot.emit('craft_log', msg);
+    };
+
+    infoLog(`Starting craft run for ${count} items...`);
 
     try {
       let remaining = count;
@@ -67,7 +71,7 @@ function injectCraftPlugin(bot) {
         remaining -= batchCount;
       }
       const elapsed = Date.now() - startTime;
-      debugLog(`Craft run completed successfully in ${elapsed}ms! Total clicks: ${totalClicks}`);
+      infoLog(`Craft run completed successfully in ${elapsed}ms! Total clicks: ${totalClicks}`);
     } finally {
       closeCraftingWindow();
     }

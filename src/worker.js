@@ -213,6 +213,10 @@ bot.on('craft_debug', (msg) => {
   debugLog(`[craft] ${msg}`);
 });
 
+bot.on('craft_log', (msg) => {
+  console.log(`[${botName}] [craft] ${msg}`);
+});
+
 bot.on('login', () => {
   parentPort.postMessage({ type: 'login' });
 });
