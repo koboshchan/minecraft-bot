@@ -2,6 +2,11 @@ function createCraftCommandController(options) {
   const { getManagedBot, hasManagedBot, debugLog = () => {} } = options;
   const craftStates = new Map();
 
+  const CRAFT_ACTIVE_INTERVAL_MS = 20;
+  const CRAFT_IDLE_INTERVAL_MS = 500;
+  const CRAFT_CHUNK_SIZES = [64, 32, 16, 8, 4, 2, 1];
+  const CRAFT_MIN_CHUNK = 32;
+
   // ── shared helpers ────────────────────────────────────────────────────────
 
   function normalizeItemName(name) {
@@ -217,8 +222,8 @@ function createCraftCommandController(options) {
   }
 
   async function runCraftPass(bot, state) {
-    if (!state.enabled || state.running) return;
-    if (!bot.entity || !bot.inventory) return;
+    if (!state.enabled || state.running) return false;
+    if (!bot.entity || !bot.inventory) return false;
 
     state.running = true;
 
@@ -226,7 +231,7 @@ function createCraftCommandController(options) {
       const craftingTable = findCraftingTable(bot);
       if (!craftingTable) {
         debugLog(`craft pass ${bot.username}: no crafting table found within range`);
-        return;
+        return false;
       }
 
       debugLog(`craft pass ${bot.username}: crafting table at ${craftingTable.position}`);
@@ -234,13 +239,13 @@ function createCraftCommandController(options) {
       const targetFrame = state.frameCache?.[0] || null;
       if (!targetFrame) {
         debugLog(`craft pass ${bot.username}: no readable item frame close to bot`);
-        return;
+        return false;
       }
       const targetItemId = resolveFrameItemId(bot, targetFrame);
 
       if (targetItemId === null) {
         debugLog(`craft pass ${bot.username}: could not resolve item id from frame`, targetFrame);
-        return;
+        return false;
       }
 
       debugLog(
@@ -256,7 +261,7 @@ function createCraftCommandController(options) {
       const recipes = bot.recipesFor(targetItemId, null, 1, craftingTable);
       if (recipes.length === 0) {
         debugLog(`craft pass ${bot.username}: no craftable recipe for item ${targetItemId}`);
-        return;
+        return false;
       }
 
       const recipe = recipes[0];
@@ -267,23 +272,29 @@ function createCraftCommandController(options) {
 
       const stackSize = Math.floor(64 / (recipe.result.count || 1));
       const maxPerPass = 64;
-      let craftCount = Math.min(stackSize, maxPerPass, maxCraftableCount(bot, recipe));
+      const ceiling = Math.min(stackSize, maxPerPass);
+      const available = maxCraftableCount(bot, recipe);
 
-      // Restrict craftCount to powers of 2 to ensure fast, click-optimized placement sizes
-      const allowedCounts = [64, 32, 16, 8, 4, 2, 1];
-      let targetCount = 0;
-      for (const countVal of allowedCounts) {
-        if (countVal <= craftCount) {
-          targetCount = countVal;
+      // Craft in 64- or 32-chunks and wait for ingredients to accumulate instead of
+      // running tiny passes. Recipes whose output stack cannot hold 32 crafts fall
+      // back to the largest power of 2 that fits.
+      const minChunk = ceiling >= CRAFT_MIN_CHUNK ? CRAFT_MIN_CHUNK : 1;
+      let craftCount = 0;
+      for (const countVal of CRAFT_CHUNK_SIZES) {
+        if (countVal >= minChunk && countVal <= ceiling && countVal <= available) {
+          craftCount = countVal;
           break;
         }
       }
-      craftCount = targetCount;
 
       if (craftCount <= 0) {
-        debugLog(`craft pass ${bot.username}: not enough ingredients`);
-        return;
+        if (state.lastWaitCount !== available) {
+          state.lastWaitCount = available;
+          debugLog(`craft pass ${bot.username}: waiting for ${minChunk} crafts, have ${available}`);
+        }
+        return false;
       }
+      state.lastWaitCount = null;
 
       // Close any window left open from a previous failed craft attempt.
       if (bot.currentWindow) {
@@ -304,6 +315,7 @@ function createCraftCommandController(options) {
       debugLog(`craft pass ${bot.username}: dropped output directly from crafting window`);
 
       debugLog(`craft pass ${bot.username}: done`);
+      return true;
     } catch (error) {
       console.warn(`[${bot.username}] craft pass error: ${error.message}`);
       // Close any stuck window and pause before retrying to let the server recover.
@@ -311,17 +323,30 @@ function createCraftCommandController(options) {
         if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
       } catch (_) {}
       await sleep(150);
+      return false;
     } finally {
       state.running = false;
     }
   }
 
-  function scheduleCraftPass(bot, state) {
-    if (!state.enabled) return;
-    if (state.running) return;
-    runCraftPass(bot, state).catch((error) => {
-      console.warn(`[${bot.username}] craft pass failed: ${error.message}`);
-    });
+  function startCraftLoop(bot, state) {
+    const tick = async () => {
+      state.timer = null;
+      if (!state.enabled) return;
+
+      let delay = CRAFT_IDLE_INTERVAL_MS;
+      try {
+        const crafted = await runCraftPass(bot, state);
+        delay = crafted ? CRAFT_ACTIVE_INTERVAL_MS : CRAFT_IDLE_INTERVAL_MS;
+      } catch (error) {
+        console.warn(`[${bot.username}] craft pass failed: ${error.message}`);
+      }
+
+      if (!state.enabled) return;
+      state.timer = setTimeout(tick, delay);
+    };
+
+    state.timer = setTimeout(tick, CRAFT_ACTIVE_INTERVAL_MS);
   }
 
   function refreshCraftItemFrameCache(bot, state) {
@@ -343,16 +368,23 @@ function createCraftCommandController(options) {
       return { ok: false, message: `Bot ${botName} not found` };
     }
 
-    const state = { enabled: true, running: false, bot, frameCache: [], cacheInterval: null };
+    const state = {
+      enabled: true,
+      running: false,
+      bot,
+      frameCache: [],
+      cacheInterval: null,
+      timer: null,
+      lastWaitCount: null
+    };
 
     refreshCraftItemFrameCache(bot, state);
 
     // 200 ticks ~= 10 seconds at 20 TPS.
     state.cacheInterval = setInterval(() => refreshCraftItemFrameCache(bot, state), 10000);
 
-    // 200 ticks ~= 10 seconds at 20 TPS.
-    const interval = setInterval(() => scheduleCraftPass(bot, state), 500);
-    state.interval = interval;
+    // Self-rescheduling loop: fast while crafting, slow while waiting on ingredients.
+    startCraftLoop(bot, state);
 
     craftStates.set(botName, state);
     debugLog(`craft enabled for ${botName}`);
@@ -367,7 +399,7 @@ function createCraftCommandController(options) {
     }
 
     state.enabled = false;
-    if (state.interval) clearInterval(state.interval);
+    if (state.timer) clearTimeout(state.timer);
     if (state.cacheInterval) clearInterval(state.cacheInterval);
     craftStates.delete(botName);
     debugLog(`craft disabled for ${botName}`);

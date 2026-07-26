@@ -6,6 +6,8 @@ module.exports = injectCraftPlugin;
 function injectCraftPlugin(bot) {
   const Item = require('prismarine-item')(bot.registry);
   const Recipe = require('prismarine-recipe')(bot.registry).Recipe;
+  const CLICK_SLEEP_MS = 1;
+  const PLACE_SIZES = [64, 32];
   let windowCraftingTable;
 
   function closeCraftingWindow() {
@@ -103,7 +105,7 @@ function injectCraftPlugin(bot) {
         if (!ingredientIds.has(item.type)) {
           debugLog(`tossing garbage item ${item.name} from slot ${item.slot}`);
           await click(item.slot, 1, 4); // drop full stack
-          await sleep(2);
+          await sleep(CLICK_SLEEP_MS);
         }
       }
     }
@@ -128,7 +130,7 @@ function injectCraftPlugin(bot) {
 
           debugLog(`picking up ingredient type ${ingredientId} from slot ${sourceItem.slot}`);
           await click(sourceItem.slot, 0, 0);
-          await sleep(2);
+          await sleep(CLICK_SLEEP_MS);
 
           if (!window.selectedItem || window.selectedItem.type !== ingredientId) {
             throw new Error(`desync: failed to pick up ingredient type ${ingredientId}`);
@@ -144,10 +146,10 @@ function injectCraftPlugin(bot) {
         } else {
           for (let i = 0; i < placements; i++) {
             await click(destSlot, 1, 0);
-            await sleep(2);
+            await sleep(CLICK_SLEEP_MS);
           }
         }
-        await sleep(2);
+        await sleep(CLICK_SLEEP_MS);
         remaining -= placements;
       }
     }
@@ -162,7 +164,7 @@ function injectCraftPlugin(bot) {
             debugLog(`inventory full, dropping leftover item from hand`);
             await click(-999, 0, 0); // click outside drops held item
           }
-          await sleep(2);
+          await sleep(CLICK_SLEEP_MS);
         } catch (e) {
           debugLog(`failed to clear selected item: ${e.message}`);
         }
@@ -193,36 +195,69 @@ function injectCraftPlugin(bot) {
       }
     }
 
-    // 4. Track available inventory counts and required grid slots per ingredient type
-    const inventoryCounts = new Map();
-    for (const item of window.items()) {
-      if (item && item.slot >= window.inventoryStart && item.slot < window.inventoryEnd) {
-        inventoryCounts.set(item.type, (inventoryCounts.get(item.type) || 0) + item.count);
+    // 4. Count what is actually on hand right now. Read live rather than from a
+    //    snapshot, so items delivered while the grid is being filled are seen.
+    function countAvailable(ingredientId, ingredientMetadata) {
+      let total = 0;
+      for (const item of window.items()) {
+        if (!item || item.type !== ingredientId) continue;
+        if (item.slot < window.inventoryStart || item.slot >= window.inventoryEnd) continue;
+        if (ingredientMetadata != null && item.metadata !== ingredientMetadata) continue;
+        total += item.count;
       }
+      const held = window.selectedItem;
+      if (held && held.type === ingredientId &&
+          (ingredientMetadata == null || held.metadata === ingredientMetadata)) {
+        total += held.count;
+      }
+      return total;
     }
 
-    const ingredientSlotCounts = new Map();
-    for (const req of gridRequirements.values()) {
-      ingredientSlotCounts.set(req.id, (ingredientSlotCounts.get(req.id) || 0) + 1);
-    }
-
-    // 5. Place ingredients sequentially using adaptive sizing (upgrade to 32 or 64 to save clicks if surplus exists)
+    // Group the grid by ingredient so slots sharing a type reuse the held stack.
+    const slotsForIngredient = new Map();
     for (const [destSlot, ingredient] of gridRequirements.entries()) {
-      const perCraftCount = ingredient.count ?? 1;
-      const neededCount = count * perCraftCount;
-      const S = ingredientSlotCounts.get(ingredient.id) || 1;
-      const totalAvailable = inventoryCounts.get(ingredient.id) || 0;
+      if (!slotsForIngredient.has(ingredient.id)) slotsForIngredient.set(ingredient.id, []);
+      slotsForIngredient.get(ingredient.id).push(destSlot);
+    }
 
-      let placeSize = neededCount;
-      if (neededCount <= 32 && S * 32 <= totalAvailable) {
-        placeSize = 32;
-      }
-      if (neededCount <= 64 && S * 64 <= totalAvailable) {
-        placeSize = 64;
+    const placedCounts = new Map();
+    for (const destSlot of gridRequirements.keys()) placedCounts.set(destSlot, 0);
+
+    // 5. Fill the grid in rounds. Each round re-reads live inventory and adaptively
+    //    upgrades to 32 or 64 per slot, so ingredients that arrived mid-pass get
+    //    topped up into the table instead of waiting for the next craft pass.
+    for (let round = 0; round < 2; round += 1) {
+      let placedAny = false;
+
+      for (const [ingredientId, destSlots] of slotsForIngredient.entries()) {
+        const ingredient = gridRequirements.get(destSlots[0]);
+        const metadata = ingredient.metadata || null;
+        const neededCount = count * (ingredient.count ?? 1);
+        const available = countAvailable(ingredientId, metadata);
+
+        // How many more items a uniform target would cost across this ingredient's slots.
+        const deficitFor = (target) =>
+          destSlots.reduce((sum, slot) => sum + Math.max(0, target - placedCounts.get(slot)), 0);
+
+        let target = neededCount;
+        for (const size of PLACE_SIZES) {
+          if (neededCount <= size && deficitFor(size) <= available) {
+            target = size;
+            break;
+          }
+        }
+
+        for (const destSlot of destSlots) {
+          const missing = target - placedCounts.get(destSlot);
+          if (missing <= 0) continue;
+          debugLog(`filling slot ${destSlot} to ${target} (adding ${missing}, available ${available})`);
+          await placeIngredient(destSlot, ingredientId, metadata, missing);
+          placedCounts.set(destSlot, target);
+          placedAny = true;
+        }
       }
 
-      await placeIngredient(destSlot, ingredient.id, ingredient.metadata || null, placeSize);
-      inventoryCounts.set(ingredient.id, Math.max(0, totalAvailable - placeSize));
+      if (!placedAny) break;
     }
 
     // 6. Clear cursor before crafting
@@ -231,7 +266,7 @@ function injectCraftPlugin(bot) {
     // 7. Drop the crafted output directly from slot 0
     debugLog(`dropping crafted output from slot 0`);
     await click(0, 1, 4); // mode 4 button 1: drop stack
-    await sleep(2);
+    await sleep(CLICK_SLEEP_MS);
 
     return clickCount;
   }
