@@ -1,5 +1,6 @@
 const { Worker } = require('worker_threads');
 const path = require('path');
+const { parseViewDistance } = require('../config');
 
 function createBotCommandManager(options) {
   const { onBeforeRemove, botStates, debugLog = () => {} } = options;
@@ -72,7 +73,9 @@ function createBotCommandManager(options) {
         authAnyways: /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || ''),
         authInitialDelayMs: Number(process.env.AUTH_INITIAL_DELAY_MS || 500),
         authLoginDelayMs: Number(process.env.AUTH_LOGIN_DELAY_MS || 800),
-        serverIp: process.env.SERVER_IP
+        serverIp: process.env.SERVER_IP,
+        debug: process.env.DEBUG === 'true' || process.env.DEBUG === '1',
+        viewDistance: parseViewDistance(process.env.VIEW_DISTANCE)
       }
     });
 

@@ -6,6 +6,7 @@ function createCraftCommandController(options) {
   const CRAFT_IDLE_INTERVAL_MS = 500;
   const CRAFT_CHUNK_SIZES = [64, 32, 16, 8, 4, 2, 1];
   const CRAFT_MIN_CHUNK = 32;
+  const TABLE_RESCAN_INTERVAL_MS = 1000;
 
   // ── shared helpers ────────────────────────────────────────────────────────
 
@@ -144,6 +145,31 @@ function createCraftCommandController(options) {
     return bot.findBlock({ matching: tableBlock.id, maxDistance });
   }
 
+  // bot.findBlock scans every block of each candidate chunk section (~1.1ms per
+  // call), which is far too expensive to repeat on every pass. The table does not
+  // move, so remember where it is and re-validate that one position instead.
+  function getCraftingTable(bot, state) {
+    const registry = getRegistryFromBot(bot);
+    const tableId = registry?.blocksByName?.crafting_table?.id;
+    if (tableId === undefined) return null;
+
+    if (state.tableCache) {
+      const block = bot.blockAt(state.tableCache);
+      if (block && block.type === tableId) return block;
+      debugLog(`craft pass ${bot.username}: cached crafting table gone, rescanning`);
+      state.tableCache = null;
+    }
+
+    // Bound the cost of rescanning when the table is genuinely missing.
+    const now = Date.now();
+    if (now - state.lastTableScanAt < TABLE_RESCAN_INTERVAL_MS) return null;
+    state.lastTableScanAt = now;
+
+    const found = findCraftingTable(bot);
+    if (found) state.tableCache = found.position;
+    return found;
+  }
+
   function getItemFramesNearBot(bot, maxDistance = 12) {
     const frames = [];
 
@@ -228,7 +254,7 @@ function createCraftCommandController(options) {
     state.running = true;
 
     try {
-      const craftingTable = findCraftingTable(bot);
+      const craftingTable = getCraftingTable(bot, state);
       if (!craftingTable) {
         debugLog(`craft pass ${bot.username}: no crafting table found within range`);
         return false;
@@ -375,7 +401,9 @@ function createCraftCommandController(options) {
       frameCache: [],
       cacheInterval: null,
       timer: null,
-      lastWaitCount: null
+      lastWaitCount: null,
+      tableCache: null,
+      lastTableScanAt: 0
     };
 
     refreshCraftItemFrameCache(bot, state);

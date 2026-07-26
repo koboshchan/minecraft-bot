@@ -27,9 +27,11 @@ console.warn = function (...args) {
 };
 
 const crypto = require('crypto');
+const { performance } = require('perf_hooks');
 const mineflayer = require('mineflayer');
 const createBotCommandManager = require('./commands/bot');
 const createSaveLoadController = require('./commands/save');
+const { parseViewDistance } = require('./config');
 
 const COMMAND_PREFIX = '+';
 const CENTER_BOT_NAME = process.env.CENTER_BOT_NAME || 'command-center';
@@ -40,6 +42,7 @@ const AUTH_ANYWAYS = /^(1|true|yes|on)$/i.test(process.env.AUTH_ANYWAYS || '');
 const AUTH_INITIAL_DELAY_MS = Number(process.env.AUTH_INITIAL_DELAY_MS || 500);
 const AUTH_LOGIN_DELAY_MS = Number(process.env.AUTH_LOGIN_DELAY_MS || 800);
 const RECONNECT_DELAY_MS = Number(process.env.RECONNECT_DELAY_MS || 10000);
+const VIEW_DISTANCE = parseViewDistance(process.env.VIEW_DISTANCE);
 const AUTH_WORLD_READY_WAIT_MS = 500;
 const ADMIN_SET = new Set(
   (process.env.ADMIN || '')
@@ -238,7 +241,8 @@ function createBot(botName, serverConfig) {
     port: serverConfig.port,
     username: botName,
     version: MINECRAFT_VERSION,
-    physicsEnabled: false
+    physicsEnabled: false,
+    viewDistance: VIEW_DISTANCE
   });
 
   attachAutoAuthFlow(bot, SERVER_IP);
@@ -328,6 +332,17 @@ const saveLoadCommands = createSaveLoadController({
   debugLog
 });
 
+// Main-thread event loop utilization, same semantics as the per-bot figure:
+// averaged since the previous reading.
+let lastCenterElu = performance.eventLoopUtilization();
+
+function getCenterCpuUtilization() {
+  const current = performance.eventLoopUtilization();
+  const delta = performance.eventLoopUtilization(current, lastCenterElu);
+  lastCenterElu = current;
+  return delta.utilization;
+}
+
 function parseControlCommand(message) {
   if (!message.startsWith(COMMAND_PREFIX)) return null;
 
@@ -348,6 +363,7 @@ function main() {
   debugLog(`config auth_world_ready_wait_ms=${AUTH_WORLD_READY_WAIT_MS}`);
   debugLog(`config auth_initial_delay_ms=${AUTH_INITIAL_DELAY_MS} auth_login_delay_ms=${AUTH_LOGIN_DELAY_MS}`);
   debugLog(`config reconnect_delay_ms=${RECONNECT_DELAY_MS}`);
+  debugLog(`config view_distance=${VIEW_DISTANCE}`);
 
   let shuttingDown = false;
   let reconnectTimer = null;
@@ -385,6 +401,9 @@ function main() {
         result = `Bot ${targetBotName} does not exist`;
       } else {
         result = await botCommands.sendCommandToWorker(targetBotName, parsed.command, parsed.parts);
+        if (parsed.command === 'status') {
+          result += ` | Center CPU: ${(getCenterCpuUtilization() * 100).toFixed(1)}%`;
+        }
       }
     }
 

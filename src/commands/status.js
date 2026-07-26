@@ -1,5 +1,12 @@
 function createStatusCommandController(options) {
-  const { getManagedBot, hasManagedBot, sortCommands, craftCommands, eventReactorCommands } = options;
+  const {
+    getManagedBot,
+    hasManagedBot,
+    sortCommands,
+    craftCommands,
+    eventReactorCommands,
+    getCpuUtilization
+  } = options;
 
   function handleStatusCommand(parts) {
     const botName = parts[0];
@@ -35,7 +42,13 @@ function createStatusCommandController(options) {
 
     const featuresString = enabledFeatures.length > 0 ? enabledFeatures.join(', ') : 'None';
 
-    return `Status [${botName}]: Position: ${px}, ${py}, ${pz} | Health: ${health}/20 | Hunger: ${food}/20 | XP: Lvl ${xpLevel} (${Math.round(xpPoints)} pts) | Enabled: ${featuresString}`;
+    // Averaged since the previous +status for this bot, so run it twice to
+    // measure a specific interval.
+    const cpuString = getCpuUtilization
+      ? ` | CPU: ${(getCpuUtilization() * 100).toFixed(1)}%`
+      : '';
+
+    return `Status [${botName}]: Position: ${px}, ${py}, ${pz} | Health: ${health}/20 | Hunger: ${food}/20 | XP: Lvl ${xpLevel} (${Math.round(xpPoints)} pts) | Enabled: ${featuresString}${cpuString}`;
   }
 
   return {

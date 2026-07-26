@@ -1,4 +1,5 @@
 const { parentPort, workerData } = require('worker_threads');
+const { performance } = require('perf_hooks');
 
 // Override console methods to prepend timestamps
 const originalLog = console.log;
@@ -41,12 +42,18 @@ const {
   authAnyways,
   authInitialDelayMs,
   authLoginDelayMs,
-  serverIp
+  serverIp,
+  debug,
+  viewDistance
 } = workerData;
 
 const AUTH_WORLD_READY_WAIT_MS = 500;
+const DEBUG = Boolean(debug);
 
+// The parent discards debug messages when DEBUG is off, so don't pay for the
+// structured clone and the parent-thread wakeup in the first place.
 function debugLog(message, extra) {
+  if (!DEBUG) return;
   parentPort.postMessage({ type: 'debug', message, extra });
 }
 
@@ -204,7 +211,8 @@ const bot = mineflayer.createBot({
   port: serverConfig.port,
   username: botName,
   version: minecraftVersion,
-  physicsEnabled: false
+  physicsEnabled: false,
+  viewDistance
 });
 
 injectCraftPlugin(bot);
@@ -227,17 +235,33 @@ const eventReactorCommands = createEventReactorController({
   craftCommands
 });
 
+// process.cpuUsage() is process-wide and shared by every worker, so it cannot
+// attribute cost to one bot. Event loop utilization is per-thread: report the
+// busy fraction since the previous sample.
+let lastElu = performance.eventLoopUtilization();
+
+function getCpuUtilization() {
+  const current = performance.eventLoopUtilization();
+  const delta = performance.eventLoopUtilization(current, lastElu);
+  lastElu = current;
+  return delta.utilization;
+}
+
 const statusCommands = createStatusCommandController({
   ...localBotHelpers,
   sortCommands,
   craftCommands,
-  eventReactorCommands
+  eventReactorCommands,
+  getCpuUtilization
 });
 
-// Event reporting
-bot.on('craft_debug', (msg) => {
-  debugLog(`[craft] ${msg}`);
-});
+// Event reporting. With no listener attached, the plugin's craft_debug emits
+// cost nothing, so skip registering it entirely when debugging is off.
+if (DEBUG) {
+  bot.on('craft_debug', (msg) => {
+    debugLog(`[craft] ${msg}`);
+  });
+}
 
 bot.on('craft_log', (msg) => {
   console.log(`[${botName}] [craft] ${msg}`);

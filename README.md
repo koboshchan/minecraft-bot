@@ -22,11 +22,17 @@ Create `.env` from `.env.example`:
 SERVER_IP=minecraft.server.com
 ADMIN=usernameOfUserToListenCommandsToCommaSeperated
 CENTER_BOT_NAME=command-center
+VIEW_DISTANCE=2
 ```
 
 - `SERVER_IP` supports `host` or `host:port`
 - `ADMIN` is comma-separated usernames allowed to run commands
 - `CENTER_BOT_NAME` is optional
+- `VIEW_DISTANCE` is chunks (integer `>= 2`) or one of `far|normal|short|tiny`, default `2`.
+  Every bot decodes and tracks everything inside its view distance, so this is the
+  main lever on CPU usage per bot. The sorter and crafter only look within 12
+  blocks, so the default is plenty. Some servers clamp or ignore the client's
+  request.
 
 ## Commands
 
@@ -47,7 +53,13 @@ These are sent in in-game chat:
 +er <botname> ...
 +save <name>
 +load <name> [waitMs]
++status <botname>
 ```
+
+`+status` reports position, health, hunger, XP, enabled features, and CPU usage.
+The CPU figures (per-bot and command center) are event loop utilization averaged
+since the *previous* `+status` for that bot, so run it twice — the second reading
+covers the interval between the two.
 
 `+load` defaults to `5000ms` between bot joins when `waitMs` is omitted.
 
