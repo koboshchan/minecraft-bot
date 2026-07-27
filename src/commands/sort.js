@@ -3,6 +3,11 @@ function createSortCommandController(options) {
   const { debugLog = () => {} } = options;
   const sorterStates = new Map();
 
+  const SORT_STACK_PAUSE_MS = 20; // rate limit between dropped stacks
+  const SORT_TURN_PAUSE_MS = 200; // settle after turning to a new frame
+  const SORT_RETRY_PAUSE_MS = 500; // back off after a drop that did not take
+  const SORT_MAX_DROPS_PER_PASS = 256;
+
   function normalizeItemName(name) {
     if (!name) {
       return '';
@@ -25,58 +30,6 @@ function createSortCommandController(options) {
         bot.lookAt(basePos, true).catch(() => {}).finally(resolve);
       }, 50);
     });
-  }
-
-  async function tossStackAsync(bot, item, beforeSignature) {
-    return new Promise((resolve) => {
-      let finished = false;
-
-      const end = (result) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timeout);
-        resolve(result);
-      };
-
-      try {
-        let p;
-        // Use slot-based toss when possible to avoid type lookup races.
-        if (typeof bot.tossStack === 'function') {
-          p = bot.tossStack(item);
-        } else if (typeof bot.toss === 'function') {
-          p = bot.toss(item.type, item.metadata ?? null, item.count);
-        }
-
-        if (p instanceof Promise) {
-          p.then(() => {
-            setTimeout(() => {
-              const current = inventorySignature(bot);
-              end({ changed: current !== beforeSignature, source: 'promise-resolve' });
-            }, 25);
-          }).catch((error) => {
-            end({ changed: false, source: 'promise-error', error });
-          });
-        } else {
-          end({ changed: false, source: 'sync-unsupported' });
-        }
-      } catch (error) {
-        end({ changed: false, source: 'catch-error', error });
-      }
-
-      // Hard safety timeout: avoid hanging forever on servers that never complete
-      const timeout = setTimeout(() => {
-        end({ changed: false, source: 'timeout' });
-      }, 1200);
-    });
-  }
-
-  function inventorySignature(bot) {
-    return bot
-      .inventory
-      .items()
-      .map((item) => `${item.slot}:${item.type}:${item.count}`)
-      .sort()
-      .join('|');
   }
 
   function getRegistryFromBot(bot) {
@@ -371,33 +324,16 @@ function createSortCommandController(options) {
     return byDistance[0] || null;
   }
 
-  function getNextSortableStack(bot, frames, stoneId) {
+  // Reads inventory live each call, so items picked up mid-pass are picked up
+  // without a second pass. Prefers the type just dropped so consecutive stacks
+  // of the same item reuse the current facing instead of alternating types.
+  function findSortableStack(bot, skippedTypes, preferredType) {
     const items = bot.inventory.items();
-    for (const item of items) {
-      const target = chooseTargetFrame(frames, item, stoneId);
-      if (target) {
-        return { item, target };
-      }
+    if (preferredType !== null) {
+      const same = items.find((item) => item.type === preferredType && !skippedTypes.has(item.type));
+      if (same) return same;
     }
-
-    return null;
-  }
-
-  function getInventoryTypeGroups(bot) {
-    const items = bot.inventory.items();
-    const groups = new Map();
-
-    for (const item of items) {
-      const key = String(item.type);
-      if (!groups.has(key)) {
-        groups.set(key, {
-          type: item.type,
-          representative: item
-        });
-      }
-    }
-
-    return Array.from(groups.values());
+    return items.find((item) => !skippedTypes.has(item.type)) || null;
   }
 
   async function runSortPass(bot, state) {
@@ -406,6 +342,20 @@ function createSortCommandController(options) {
     }
 
     if (!bot.entity || !bot.inventory) {
+      return;
+    }
+
+    // A window click here would target the open window, not the player
+    // inventory, and land on the wrong slot. Let the next pass retry.
+    if (bot.currentWindow) {
+      debugLog(`sort skip ${bot.username}: another window is open`);
+      return;
+    }
+
+    // dropClick is a no-op while something is on the cursor, which would look
+    // like every type failing to drop.
+    if (bot.inventory.selectedItem) {
+      debugLog(`sort skip ${bot.username}: item held on cursor`);
       return;
     }
 
@@ -424,91 +374,62 @@ function createSortCommandController(options) {
 
       state.noFramePasses = 0;
       const stoneId = getItemIdByName(bot, 'stone');
-      let totalTossed = 0;
-      let cycle = 0;
 
-      for (; cycle < 256 && state.enabled; cycle += 1) {
-        const groups = getInventoryTypeGroups(bot);
-        debugLog(`sort pass ${bot.username}: inventoryItems=${bot.inventory.items().length} cycle=${cycle}`);
-
-        if (groups.length === 0) {
-          break;
-        }
-
-        let tossedInCycle = 0;
+      let dropped = 0;
       let lastFrameEntityId = null;
+      let preferredType = null;
+      const skippedTypes = new Set();
 
-        for (const group of groups) {
-          if (!state.enabled) {
-            break;
-          }
+      while (state.enabled && dropped < SORT_MAX_DROPS_PER_PASS) {
+        const stack = findSortableStack(bot, skippedTypes, preferredType);
+        if (!stack) break;
 
-          const target = chooseTargetFrame(frames, group.representative, stoneId);
-          if (!target) {
-            debugLog(`sort skip ${bot.username}: no target for type ${group.type}`);
-            continue;
-          }
+        const target = chooseTargetFrame(frames, stack, stoneId);
+        if (!target) {
+          debugLog(`sort skip ${bot.username}: no target for type ${stack.type}`);
+          skippedTypes.add(stack.type);
+          continue;
+        }
 
-          // Only turn (and wait for physics) when the target frame changes.
-          const needsTurn = target.entity.id !== lastFrameEntityId;
-          if (needsTurn) {
-            await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
-            await sleep(150); // wait 3 ticks before throwing after turn
-          }
+        // Only turn (and wait for physics) when the target frame changes. Different
+        // item types can share a frame via the stone fallback, so this must key off
+        // the frame, not the item type.
+        if (target.entity.id !== lastFrameEntityId) {
+          await lookAtJitter(bot, target.entity.position.offset(0, 0.5, 0));
+          await sleep(SORT_TURN_PAUSE_MS);
           lastFrameEntityId = target.entity.id;
-
-          let stagnantForType = 0;
-          while (state.enabled) {
-            const liveStack = bot.inventory.items().find((entry) => entry.type === group.type);
-            if (!liveStack) {
-              break;
-            }
-
-            try {
-              debugLog(
-                `sort toss ${bot.username}: ${liveStack.name}#${liveStack.type} -> frame(${target.itemName || 'id-only'}#${target.itemId})`
-              );
-
-              const beforeSignature = inventorySignature(bot);
-              const tossResult = await tossStackAsync(bot, liveStack, beforeSignature);
-              if (!tossResult) {
-                break;
-              }
-
-              if (!tossResult.changed) {
-                stagnantForType += 1;
-                debugLog(
-                  `sort toss no-change ${bot.username}: type=${group.type} stagnant=${stagnantForType} source=${tossResult.source}`
-                );
-                
-                // Add explicit network sleep on failures to ensure failed actions do not instantly loop
-                await sleep(500); 
-
-                if (stagnantForType >= 2) {
-                  break;
-                }
-              } else {
-                stagnantForType = 0;
-                tossedInCycle += 1;
-                totalTossed += 1;
-                
-                // Add a network queue cooldown delay between inventory movements to prevent Folia packet spam
-                await sleep(50);
-              }
-            } catch (error) {
-              console.warn(`[${bot.username}] sort toss failed: ${error.message}`);
-              await sleep(500); // Sleep on hard throw errors too!
-              break;
-            }
-          }
         }
 
-        if (tossedInCycle === 0) {
-          break;
+        const slot = stack.slot;
+        debugLog(
+          `sort drop ${bot.username}: ${stack.name}#${stack.type} slot=${slot} -> frame(${target.itemName || 'id-only'}#${target.itemId})`
+        );
+
+        try {
+          await bot.clickWindow(slot, 1, 4); // drop whole stack, one packet
+        } catch (error) {
+          console.warn(`[${bot.username}] sort drop failed: ${error.message}`);
+          skippedTypes.add(stack.type);
+          await sleep(SORT_RETRY_PAUSE_MS);
+          continue;
         }
+
+        // A successful drop nulls the slot locally. Anything still there means the
+        // drop did not take; skip this type for the rest of the pass and let the
+        // next pass retry once the server has re-synced.
+        if (bot.inventory.slots[slot]) {
+          debugLog(`sort drop no-change ${bot.username}: slot=${slot} type=${stack.type}`);
+          skippedTypes.add(stack.type);
+          await sleep(SORT_RETRY_PAUSE_MS);
+          continue;
+        }
+
+        preferredType = stack.type;
+        dropped += 1;
+        await sleep(SORT_STACK_PAUSE_MS);
       }
 
-      debugLog(`sort pass ${bot.username}: totalTossed=${totalTossed}`);
+      debugLog(`sort pass ${bot.username}: dropped=${dropped}`);
     } finally {
       state.running = false;
 
